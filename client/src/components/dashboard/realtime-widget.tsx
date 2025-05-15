@@ -14,8 +14,24 @@ export const RealtimeWidget: React.FC = () => {
     recentEvents,
     startVoiceChat,
     isConnecting,
-    connectionError
+    connectionError,
+    assistantMode,
+    updateWakePhrase
   } = useOpenAIRealtime();
+  
+  const [wakePhrase, setWakePhrase] = React.useState(sessionInfo.wakePhrase);
+  
+  // Handle wake phrase input change
+  const handleWakePhraseChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setWakePhrase(e.target.value);
+  };
+  
+  // Save wake phrase changes
+  const saveWakePhrase = () => {
+    if (wakePhrase.trim()) {
+      updateWakePhrase(wakePhrase);
+    }
+  };
 
   // Determine status color
   const getStatusColor = (status: string) => {
@@ -73,10 +89,52 @@ export const RealtimeWidget: React.FC = () => {
             <Mic className="h-4 w-4 mr-2 text-accent-alt" />
             {isConnecting ? 'Connecting...' : connectionStatus === 'connected' ? 'Connected' : 'Start Voice Chat'}
           </Button>
-          <Button className="bg-primary/60 hover:bg-primary/80 transition-all flex items-center border border-border/30">
+          <Button 
+            className="bg-primary/60 hover:bg-primary/80 transition-all flex items-center border border-border/30"
+            onClick={() => document.getElementById('wake-phrase-dialog')?.classList.toggle('hidden')}
+          >
             <Settings className="h-4 w-4 mr-2 text-accent-alt" />
             Voice Settings
           </Button>
+          
+          {/* Wake Phrase Settings Dialog */}
+          <div id="wake-phrase-dialog" className="hidden absolute top-full left-0 mt-2 p-4 bg-primary/90 backdrop-blur-xl rounded-xl border border-border z-10 w-64 shadow-xl">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-medium text-text">Wake Phrase</h3>
+              <Button 
+                size="sm" 
+                variant="ghost" 
+                className="h-6 w-6 p-0"
+                onClick={() => document.getElementById('wake-phrase-dialog')?.classList.toggle('hidden')}
+              >
+                ✕
+              </Button>
+            </div>
+            <div className="space-y-3">
+              <div className="text-xs text-text-muted">
+                The system will start listening when you say:
+              </div>
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  className="flex-1 bg-primary/60 border border-border/30 rounded-md p-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-alt"
+                  value={wakePhrase}
+                  onChange={handleWakePhraseChange}
+                  placeholder="e.g. Hey Assistant"
+                />
+                <Button 
+                  size="sm" 
+                  className="bg-accent-alt/20 hover:bg-accent-alt/30 text-accent-alt text-xs"
+                  onClick={saveWakePhrase}
+                >
+                  Save
+                </Button>
+              </div>
+              <div className="text-xs text-accent-alt">
+                Speak clearly and pause slightly after the wake phrase.
+              </div>
+            </div>
+          </div>
         </div>
         
         {connectionError && (

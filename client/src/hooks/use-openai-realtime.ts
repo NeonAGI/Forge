@@ -1,6 +1,51 @@
 import { useState, useEffect, useRef } from "react";
 import { apiRequest } from "@/lib/queryClient";
 
+// Define SpeechRecognition interface for TypeScript
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+interface SpeechRecognitionResultList {
+  readonly length: number;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  readonly length: number;
+  readonly isFinal: boolean;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  readonly transcript: string;
+  readonly confidence: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onerror: (event: SpeechRecognitionErrorEvent) => void;
+  onend: () => void;
+  onresult: (event: SpeechRecognitionEvent) => void;
+  start(): void;
+  stop(): void;
+}
+
+// Add global interface extensions for browser compatibility
+declare global {
+  interface Window {
+    SpeechRecognition?: typeof SpeechRecognition;
+    webkitSpeechRecognition?: typeof SpeechRecognition;
+  }
+}
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 export type AssistantMode = 'idle' | 'listening' | 'speaking' | 'processing';
 
@@ -26,8 +71,13 @@ export function useOpenAIRealtime() {
     language: 'English (US)',
     model: 'gpt-4o-realtime-preview',
     connectionType: 'WebRTC',
-    startTime: null
+    startTime: null,
+    wakePhrase: 'Hey Assistant'
   });
+  
+  const [assistantMode, setAssistantMode] = useState<AssistantMode>('idle');
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const wakePhraseDetectedRef = useRef<boolean>(false);
   const [recentEvents, setRecentEvents] = useState<RealtimeEvent[]>([]);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   
@@ -40,6 +90,7 @@ export function useOpenAIRealtime() {
   const startVoiceChat = async () => {
     setIsConnecting(true);
     setConnectionError(null);
+    setAssistantMode('connecting');
     
     try {
       // Check if browser supports required APIs
@@ -66,14 +117,15 @@ export function useOpenAIRealtime() {
       setAudioElement(audio);
       
       // Handle incoming audio tracks
-      pc.ontrack = (event) => {
+      pc.ontrack = (event: RTCTrackEvent) => {
         if (audio) {
           audio.srcObject = event.streams[0];
+          setAssistantMode('speaking');
         }
       };
       
       // Add event handlers
-      pc.onicecandidate = async (event) => {
+      pc.onicecandidate = async (event: RTCPeerConnectionIceEvent) => {
         if (event.candidate) {
           // Send ICE candidate to server
           await apiRequest("POST", `/api/realtime/ice`, {
@@ -90,18 +142,22 @@ export function useOpenAIRealtime() {
       channel.onopen = () => {
         console.log("Data channel opened");
         setConnectionStatus('connected');
+        setAssistantMode('listening');
         
         // Record session start time
+        const now = new Date();
+        const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
         setSessionInfo(prev => ({
           ...prev,
-          startTime: '1 minute ago' // In a real app, store the actual time
+          startTime: formattedTime
         }));
         
         // Add a connection event
         addRecentEvent("session.created");
       };
       
-      channel.onmessage = (event) => {
+      channel.onmessage = (event: MessageEvent) => {
         try {
           const message = JSON.parse(event.data);
           console.log("Received message:", message);
@@ -109,26 +165,35 @@ export function useOpenAIRealtime() {
           // Handle different types of messages from the server
           if (message.type === 'session.updated') {
             // Update session info
+            addRecentEvent("session.updated");
           } else if (message.type === 'response.done') {
             addRecentEvent("response.done");
+            setAssistantMode('idle');
+          } else if (message.type === 'response.started') {
+            addRecentEvent("response.started");
+            setAssistantMode('speaking');
           } else if (message.type === 'conversation.item.created') {
             addRecentEvent("conversation.item.created");
+          } else if (message.type === 'processing') {
+            addRecentEvent("processing");
+            setAssistantMode('processing');
           }
-        } catch (err) {
-          console.error("Error parsing message:", err);
+        } catch (error) {
+          console.error("Error parsing message:", error);
         }
       };
       
       channel.onclose = () => {
         console.log("Data channel closed");
         setConnectionStatus('disconnected');
+        setAssistantMode('idle');
       };
       
       // Add local audio track
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach(track => pc.addTrack(track, stream));
-      } catch (err) {
+      } catch (error) {
         throw new Error("Microphone access denied. Please allow microphone access to use voice chat.");
       }
       
@@ -148,11 +213,12 @@ export function useOpenAIRealtime() {
       setPeerConnection(pc);
       setIsConnecting(false);
       
-    } catch (err) {
-      console.error("Error starting voice chat:", err);
-      setConnectionError(err.message || "Failed to connect to OpenAI Realtime");
+    } catch (error: any) {
+      console.error("Error starting voice chat:", error);
+      setConnectionError(error.message || "Failed to connect to OpenAI Realtime");
       setConnectionStatus('disconnected');
       setIsConnecting(false);
+      setAssistantMode('idle');
     }
   };
   
@@ -191,13 +257,133 @@ export function useOpenAIRealtime() {
     });
   };
   
-  // Clean up resources on unmount
+  // Initialize wake phrase detection 
+  const startWakePhraseDetection = () => {
+    // Use the browser's SpeechRecognition API for wake phrase detection
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      console.error("Speech recognition not supported in this browser");
+      return;
+    }
+    
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US'; // Match this to user's language preference
+      
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map(result => result[0].transcript.toLowerCase())
+          .join(' ');
+        
+        console.log("Heard:", transcript);
+        
+        // Check if the wake phrase was detected
+        if (transcript.includes(sessionInfo.wakePhrase.toLowerCase())) {
+          console.log("Wake phrase detected!");
+          wakePhraseDetectedRef.current = true;
+          setAssistantMode('listening');
+          addRecentEvent("wake_phrase.detected");
+          
+          // If already connected, start listening for the actual command
+          if (connectionStatus === 'connected') {
+            // The system is ready to receive the command
+            // Visual feedback can be shown here
+          } else {
+            // If not connected, auto-connect when wake phrase is detected
+            startVoiceChat();
+          }
+        }
+      };
+      
+      recognition.onerror = (event) => {
+        console.error("Speech recognition error", event.error);
+        // Restart if there was an error
+        setTimeout(() => {
+          if (recognitionRef.current) {
+            try {
+              recognitionRef.current.start();
+            } catch (e) {
+              console.error("Failed to restart speech recognition", e);
+            }
+          }
+        }, 1000);
+      };
+      
+      recognition.onend = () => {
+        // Automatically restart recognition when it ends
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch (e) {
+            console.error("Failed to restart speech recognition", e);
+          }
+        }
+      };
+      
+      recognitionRef.current = recognition;
+      recognition.start();
+      
+      console.log("Wake phrase detection started");
+      addRecentEvent("wake_phrase.detection.started");
+      
+    } catch (err) {
+      console.error("Error starting wake phrase detection:", err);
+    }
+  };
+  
+  // Stop wake phrase detection
+  const stopWakePhraseDetection = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+      console.log("Wake phrase detection stopped");
+    }
+  };
+  
+  // Auto-start wake phrase detection on component mount
   useEffect(() => {
+    startWakePhraseDetection();
+    
     return () => {
+      stopWakePhraseDetection();
       disconnect();
     };
   }, []);
   
+  // Update the UI based on assistant mode changes
+  useEffect(() => {
+    // This effect can be used to trigger visual changes in the UI
+    // when the assistant mode changes (idle, listening, speaking, processing)
+    console.log("Assistant mode changed:", assistantMode);
+    
+    // If the assistant was in listening mode and now it's not, reset the wake phrase flag
+    if (assistantMode !== 'listening' && wakePhraseDetectedRef.current) {
+      wakePhraseDetectedRef.current = false;
+    }
+    
+  }, [assistantMode]);
+  
+  // Update wake phrase
+  const updateWakePhrase = (newWakePhrase: string) => {
+    setSessionInfo(prev => ({
+      ...prev,
+      wakePhrase: newWakePhrase
+    }));
+    
+    // If the recognition is running, restart it for the changes to take effect
+    if (recognitionRef.current) {
+      stopWakePhraseDetection();
+      startWakePhraseDetection();
+    }
+  };
+
   return {
     connectionStatus,
     sessionInfo,
@@ -205,6 +391,11 @@ export function useOpenAIRealtime() {
     startVoiceChat,
     disconnect,
     isConnecting,
-    connectionError
+    connectionError,
+    assistantMode,
+    updateWakePhrase,
+    startWakePhraseDetection,
+    stopWakePhraseDetection,
+    wakePhraseActive: wakePhraseDetectedRef.current
   };
 }
