@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 0 0% 100%;  /* White with 70% opacity */
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 4.8% 95.9%;  /* F8F9FA with 50% opacity */
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 110 110 126;  /* #6E6E80 */
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 240 5.9% 10%;
+  --radius: 1rem;
+  --text: 0 0% 13%;  /* #202123 */
+  --bg-start: 220 15% 92%;  /* #E6E9F0 */
+  --bg-end: 216 15% 95%;  /* #EEF1F5 */
+}
+
+.dark {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 3.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 100%;
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 110 110 126; /* #6E6E80 */
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 3.7% 15.9%;
+  --input: 240 3.7% 15.9%;
+  --ring: 240 4.9% 83.9%;
+  --text: 0 0% 13%; /* #202123 */
+  --bg-start: 220 15% 92%; /* #E6E9F0 */
+  --bg-end: 216 15% 95%; /* #EEF1F5 */
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html, body, #root {
+    height: 100%;
+    @apply font-sans antialiased;
+  }
+
+  body {
+    @apply bg-gradient-to-br from-[#E6E9F0] to-[#EEF1F5] text-[#202123];
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-primary/70 backdrop-blur-md border border-white/30 rounded-2xl shadow-sm;
+  }
+  
+  .glass-secondary {
+    @apply bg-secondary/50 backdrop-blur-md border border-white/20 rounded-2xl;
+  }
+  
+  .text-accent {
+    @apply text-[#6E6E80];
+  }
+  
+  .text-text {
+    @apply text-[#202123];
+  }
+  
+  .fade-in {
+    @apply animate-fade-in;
+  }
+  
+  .pulse-dot {
+    @apply animate-pulse;
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s ease-in-out;
+}
