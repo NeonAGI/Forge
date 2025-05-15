@@ -2,7 +2,19 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import openai from "./openai";
+
+// Helper function to generate random strings of specified length for ICE parameters
+const generateRandomString = (length: number): string => {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += characters.charAt(Math.floor(Math.random() * characters.length));
+  }
+  return result;
+};
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Make the generateRandomString function available in this scope
+  const createRandomString = generateRandomString;
   const httpServer = createServer(app);
   
   // Use a Map to store sessions for the OpenAI Realtime simulation
@@ -124,8 +136,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create proper WebRTC offer with correct media sections and valid ICE parameters
       // Generate random values of the right length for ICE parameters
-      const iceUfrag = generateRandomString(8); // 4-256 characters
-      const icePwd = generateRandomString(24);  // 22-256 characters
+      const iceUfrag = createRandomString(8); // 4-256 characters
+      const icePwd = createRandomString(24);  // 22-256 characters
       
       const offer = {
         type: "offer",
@@ -145,15 +157,7 @@ a=sctp-port:5000\r
 `
       };
       
-      // Use an immediately invoked arrow function to avoid the function declaration in block
-      const generateRandomString = (length: number): string => {
-        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-        let result = '';
-        for (let i = 0; i < length; i++) {
-          result += characters.charAt(Math.floor(Math.random() * characters.length));
-        }
-        return result;
-      }
+      // We're using the generateRandomString function that's defined at the top of the file
       
       // Store session info
       sessions.set(sessionId, {
