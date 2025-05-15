@@ -22,6 +22,7 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Router />
+        <VoiceOrb />
       </TooltipProvider>
     </QueryClientProvider>
   );

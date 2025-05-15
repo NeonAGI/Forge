@@ -239,6 +239,18 @@
     filter: blur(0);
   }
   
+  .orb.processing {
+    transform: scale(1.15);
+    background: radial-gradient(circle at center, 
+                rgba(239, 135, 0, 0.7), 
+                rgba(0, 195, 255, 0.3));
+    box-shadow: 0 0 30px 15px rgba(239, 135, 0, 0.3),
+                0 0 60px 20px rgba(0, 195, 255, 0.2),
+                inset 0 0 15px rgba(255, 255, 255, 0.3);
+    animation: processing 3s infinite ease-in-out;
+    filter: blur(0);
+  }
+  
   .orb.idle {
     animation: breathe 4s infinite alternate;
   }
@@ -264,6 +276,19 @@
     box-shadow: 0 0 10px 5px rgba(0, 195, 255, 0.5),
                 inset 0 0 6px rgba(255, 255, 255, 0.7);
     animation: innerWave 2s infinite linear;
+  }
+  
+  .orb.processing .orb-inner {
+    background: radial-gradient(
+      circle at 30% 30%, 
+      rgba(255, 255, 255, 0.9), 
+      rgba(239, 135, 0, 0.5),
+      rgba(0, 195, 255, 0.5)
+    );
+    box-shadow: 0 0 10px 5px rgba(239, 135, 0, 0.4),
+                0 0 15px 5px rgba(0, 195, 255, 0.2),
+                inset 0 0 6px rgba(255, 255, 255, 0.7);
+    animation: processing 3s infinite ease-in-out reverse;
   }
   
   .weather-card {
@@ -326,6 +351,12 @@
   50% { transform: scale(1.1) rotate(0deg); }
   75% { transform: scale(1.05) rotate(-10deg); }
   100% { transform: scale(1) rotate(0deg); }
+}
+
+@keyframes processing {
+  0% { transform: scale(1); box-shadow: 0 0 15px rgba(0, 195, 255, 0.5); }
+  50% { transform: scale(1.12); box-shadow: 0 0 25px rgba(239, 135, 0, 0.5); }
+  100% { transform: scale(1); box-shadow: 0 0 15px rgba(0, 195, 255, 0.5); }
 }
 
 @keyframes expand {
