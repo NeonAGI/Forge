@@ -122,10 +122,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Here we're simulating the response
       const sessionId = Date.now().toString();
       
-      // Create mock WebRTC offer
+      // Create proper WebRTC offer with correct media sections
       const offer = {
         type: "offer",
-        sdp: "v=0\r\no=- 1234567890 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=group:BUNDLE audio data\r\n"
+        sdp: `v=0\r
+o=- 1234567890 1 IN IP4 0.0.0.0\r
+s=-\r
+t=0 0\r
+a=group:BUNDLE data\r
+m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r
+c=IN IP4 0.0.0.0\r
+a=ice-ufrag:someufrag\r
+a=ice-pwd:someicepwd\r
+a=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r
+a=setup:actpass\r
+a=mid:data\r
+a=sctp-port:5000\r
+`
       };
       
       // Store session info
