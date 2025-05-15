@@ -41,8 +41,12 @@ interface SpeechRecognition extends EventTarget {
 // Add global interface extensions for browser compatibility
 declare global {
   interface Window {
-    SpeechRecognition?: typeof SpeechRecognition;
-    webkitSpeechRecognition?: typeof SpeechRecognition;
+    SpeechRecognition?: {
+      new(): SpeechRecognition;
+    };
+    webkitSpeechRecognition?: {
+      new(): SpeechRecognition;
+    };
   }
 }
 
@@ -310,12 +314,16 @@ export function useOpenAIRealtime() {
       return;
     }
     
+    type SpeechRecognitionConstructorType = {
+      new(): SpeechRecognition;
+    };
+    
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
     
     try {
-      const recognition = new SpeechRecognitionConstructor();
+      const recognition = new (SpeechRecognitionConstructor as SpeechRecognitionConstructorType)();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US'; // Match this to user's language preference

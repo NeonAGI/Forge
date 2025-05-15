@@ -122,7 +122,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Here we're simulating the response
       const sessionId = Date.now().toString();
       
-      // Create proper WebRTC offer with correct media sections
+      // Create proper WebRTC offer with correct media sections and valid ICE parameters
+      // Generate random values of the right length for ICE parameters
+      const iceUfrag = generateRandomString(8); // 4-256 characters
+      const icePwd = generateRandomString(24);  // 22-256 characters
+      
       const offer = {
         type: "offer",
         sdp: `v=0\r
@@ -132,14 +136,24 @@ t=0 0\r
 a=group:BUNDLE data\r
 m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r
 c=IN IP4 0.0.0.0\r
-a=ice-ufrag:someufrag\r
-a=ice-pwd:someicepwd\r
+a=ice-ufrag:${iceUfrag}\r
+a=ice-pwd:${icePwd}\r
 a=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r
 a=setup:actpass\r
 a=mid:data\r
 a=sctp-port:5000\r
 `
       };
+      
+      // Use an immediately invoked arrow function to avoid the function declaration in block
+      const generateRandomString = (length: number): string => {
+        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        let result = '';
+        for (let i = 0; i < length; i++) {
+          result += characters.charAt(Math.floor(Math.random() * characters.length));
+        }
+        return result;
+      }
       
       // Store session info
       sessions.set(sessionId, {
