@@ -16,7 +16,9 @@ export const RealtimeWidget: React.FC = () => {
     isConnecting,
     connectionError,
     assistantMode,
-    updateWakePhrase
+    updateWakePhrase,
+    startWakePhraseDetection,
+    stopWakePhraseDetection
   } = useOpenAIRealtime();
   
   const [wakePhrase, setWakePhrase] = React.useState(sessionInfo.wakePhrase);
@@ -90,6 +92,25 @@ export const RealtimeWidget: React.FC = () => {
             {isConnecting ? 'Connecting...' : connectionStatus === 'connected' ? 'Connected' : 'Start Voice Chat'}
           </Button>
           <Button 
+            className={cn(
+              "transition-all flex items-center border border-border/30",
+              connectionStatus === 'connected' && assistantMode !== 'idle' 
+                ? "bg-red-700/30 hover:bg-red-700/40 border-red-700/30" 
+                : "bg-primary/60 hover:bg-primary/80"
+            )}
+            onClick={() => {
+              if (connectionStatus === 'connected' && assistantMode !== 'idle') {
+                stopWakePhraseDetection();
+              } else {
+                startWakePhraseDetection();
+              }
+            }}
+            disabled={!connectionStatus || connectionStatus !== 'connected'}
+          >
+            <Volume2 className="h-4 w-4 mr-2 text-accent-alt" />
+            {connectionStatus === 'connected' && assistantMode !== 'idle' ? 'Stop Listening' : 'Enable Wake Phrase'}
+          </Button>
+          <Button 
             className="bg-primary/60 hover:bg-primary/80 transition-all flex items-center border border-border/30"
             onClick={() => document.getElementById('wake-phrase-dialog')?.classList.toggle('hidden')}
           >
@@ -142,6 +163,16 @@ export const RealtimeWidget: React.FC = () => {
             {connectionError}
           </div>
         )}
+        
+        <div className="mt-4 text-xs text-accent-alt border border-border/30 bg-primary/40 p-2.5 rounded-lg">
+          <p className="mb-1 font-medium">Voice Assistant Guide:</p>
+          <ol className="list-decimal pl-4 space-y-1">
+            <li>Click "Start Voice Chat" to connect</li>
+            <li>Click "Enable Wake Phrase" to let the system listen</li>
+            <li>Say "{sessionInfo.wakePhrase}" to activate the assistant</li>
+            <li>Browser permission is required for microphone access</li>
+          </ol>
+        </div>
       </div>
       
       <div className="bg-primary/40 rounded-xl p-4 border border-border/30 backdrop-blur-sm">

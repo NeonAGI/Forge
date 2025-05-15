@@ -395,10 +395,10 @@ export function useOpenAIRealtime() {
     }
   };
   
-  // Auto-start wake phrase detection on component mount
+  // We'll now wait for user to explicitly start wake phrase detection
+  // rather than auto-starting it (which many browsers block)
   useEffect(() => {
-    startWakePhraseDetection();
-    
+    // Only cleanup on unmount
     return () => {
       stopWakePhraseDetection();
       disconnect();
