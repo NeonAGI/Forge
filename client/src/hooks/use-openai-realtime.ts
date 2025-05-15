@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { apiRequest } from "@/lib/queryClient";
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
+export type AssistantMode = 'idle' | 'listening' | 'speaking' | 'processing';
 
 export interface SessionInfo {
   voice: string;
@@ -9,6 +10,7 @@ export interface SessionInfo {
   model: string;
   connectionType: string;
   startTime: string | null;
+  wakePhrase: string;
 }
 
 export interface RealtimeEvent {
