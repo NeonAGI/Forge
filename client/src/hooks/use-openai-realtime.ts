@@ -110,7 +110,7 @@ export function useOpenAIRealtime() {
       
       const { offer, sessionId } = await response.json();
       
-      // Create new WebRTC peer connection
+      // Create new WebRTC peer connection with STUN servers
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
@@ -120,12 +120,37 @@ export function useOpenAIRealtime() {
       audio.autoplay = true;
       setAudioElement(audio);
       
-      // In a real implementation, we would handle incoming audio tracks
-      // For this demo, we'll simulate the speaking state transitions
+      // Set up to play remote audio from the model
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          audio.srcObject = event.streams[0];
+          console.log("Received remote audio track");
+        }
+      };
+      
+      // Try to add local audio track if available
+      try {
+        // For demo purposes, we'll skip real microphone access to avoid permission issues
+        // But in a real implementation, we would do this:
+        /*
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: true
+        });
+        mediaStream.getTracks().forEach(track => {
+          pc.addTrack(track, mediaStream);
+        });
+        */
+        console.log("In a real implementation, we would add a local audio track here");
+      } catch (error) {
+        console.error("Could not access microphone:", error);
+      }
+      
+      // Monitor connection state changes
       pc.onconnectionstatechange = () => {
         console.log("Connection state:", pc.connectionState);
         if (pc.connectionState === 'connected') {
-          // Simulate speaking state changes for demo purposes
+          // In a real implementation, the assistant would respond to voice input
+          // For this demo, we'll simulate the state transitions
           setTimeout(() => {
             setAssistantMode('speaking');
             
@@ -135,6 +160,10 @@ export function useOpenAIRealtime() {
               setAssistantMode('listening');
             }, 3000);
           }, 1000);
+        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          setConnectionError("WebRTC connection failed or disconnected. Try reconnecting.");
+          setConnectionStatus('disconnected');
+          setAssistantMode('idle');
         }
       };
       
@@ -149,10 +178,11 @@ export function useOpenAIRealtime() {
         }
       };
       
-      // Setup data channel for JSON messages
-      const channel = pc.createDataChannel("json");
+      // Setup data channel for OpenAI events based on the documentation
+      const channel = pc.createDataChannel("oai-events");
       setDataChannel(channel);
       
+      // Handle data channel open event
       channel.onopen = () => {
         console.log("Data channel opened");
         setConnectionStatus('connected');
@@ -169,27 +199,55 @@ export function useOpenAIRealtime() {
         
         // Add a connection event
         addRecentEvent("session.created");
+        
+        // In a real implementation, we would send a greeting or start event to the model
+        try {
+          // The format for sending events to the OpenAI Realtime API
+          const startEvent = JSON.stringify({
+            type: "audio.transcription.response",
+            text: "Hello, how can I help you today?",
+            is_final: true,
+            message_id: generateMessageId()
+          });
+          
+          // In a complete implementation, we'd send this to start the conversation
+          // channel.send(startEvent);
+          
+          // For demo purposes, let's simulate the client-server interaction
+          simulateAssistantInteraction();
+        } catch (error) {
+          console.error("Failed to send initial event:", error);
+        }
       };
       
+      // Handle incoming messages from the data channel
       channel.onmessage = (event: MessageEvent) => {
         try {
           const message = JSON.parse(event.data);
           console.log("Received message:", message);
           
-          // Handle different types of messages from the server
-          if (message.type === 'session.updated') {
-            // Update session info
-            addRecentEvent("session.updated");
-          } else if (message.type === 'response.done') {
-            addRecentEvent("response.done");
+          // Handle different types of messages based on the OpenAI Realtime API
+          if (message.type === 'conversation.started') {
+            addRecentEvent("conversation.started");
+          } else if (message.type === 'conversation.completed') {
+            addRecentEvent("conversation.completed");
             setAssistantMode('idle');
-          } else if (message.type === 'response.started') {
-            addRecentEvent("response.started");
+          } else if (message.type === 'audio.response.started') {
+            addRecentEvent("audio.response.started");
             setAssistantMode('speaking');
-          } else if (message.type === 'conversation.item.created') {
-            addRecentEvent("conversation.item.created");
-          } else if (message.type === 'processing') {
-            addRecentEvent("processing");
+          } else if (message.type === 'audio.response.message') {
+            addRecentEvent("audio.response.message");
+            setAssistantMode('speaking');
+          } else if (message.type === 'audio.response.completed') {
+            addRecentEvent("audio.response.completed");
+            setAssistantMode('listening');
+          } else if (message.type === 'audio.transcription.started') {
+            addRecentEvent("audio.transcription.started");
+            setAssistantMode('listening');
+          } else if (message.type === 'audio.transcription.response') {
+            addRecentEvent("audio.transcription.response");
+          } else if (message.type === 'assistant.content.response') {
+            addRecentEvent("assistant.content.response");
             setAssistantMode('processing');
           }
         } catch (error) {
@@ -197,47 +255,37 @@ export function useOpenAIRealtime() {
         }
       };
       
-      // For the demo, let's simulate incoming messages for the AI assistant
-      channel.onopen = () => {
-        console.log("Data channel opened");
-        setConnectionStatus('connected');
-        setAssistantMode('listening');
-        
-        // Record session start time
-        const now = new Date();
-        const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
-        setSessionInfo(prev => ({
-          ...prev,
-          startTime: formattedTime
-        }));
-        
-        // Add a connection event
-        addRecentEvent("session.created");
-        
-        // Simulate the AI processing a query after 2 seconds
-        setTimeout(() => {
-          setAssistantMode('processing');
-          addRecentEvent("processing");
-          
-          // Then simulate the AI speaking after another 2 seconds
-          setTimeout(() => {
-            setAssistantMode('speaking'); 
-            addRecentEvent("response.started");
-            
-            // Finally back to idle/listening after 3 seconds of "speaking"
-            setTimeout(() => {
-              setAssistantMode('idle');
-              addRecentEvent("response.done");
-            }, 3000);
-          }, 2000);
-        }, 2000);
-      };
-      
+      // Handle data channel close
       channel.onclose = () => {
         console.log("Data channel closed");
         setConnectionStatus('disconnected');
         setAssistantMode('idle');
+      };
+      
+      // Generate a unique message ID
+      const generateMessageId = () => {
+        return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      };
+      
+      // Simulate the assistant interaction for demo purposes
+      const simulateAssistantInteraction = () => {
+        // Simulate the AI processing a query after 2 seconds
+        setTimeout(() => {
+          setAssistantMode('processing');
+          addRecentEvent("assistant.content.response");
+          
+          // Then simulate the AI speaking after another 2 seconds
+          setTimeout(() => {
+            setAssistantMode('speaking'); 
+            addRecentEvent("audio.response.started");
+            
+            // Finally back to idle/listening after 3 seconds of "speaking"
+            setTimeout(() => {
+              setAssistantMode('listening');
+              addRecentEvent("audio.response.completed");
+            }, 3000);
+          }, 2000);
+        }, 2000);
       };
       
       // We're handling a data-only connection for simulating the OpenAI Realtime API
