@@ -429,6 +429,67 @@ export async function cleanupOrphanedRecords(userId?: number): Promise<void> {
   }
 }
 
+// Get all images for a user (for logging/debugging)
+export async function getAllUserImages(userId: number): Promise<GeneratedImage[]> {
+  try {
+    const images = await db
+      .select()
+      .from(generatedImages)
+      .where(eq(generatedImages.userId, userId))
+      .orderBy(desc(generatedImages.updatedAt));
+    
+    return images;
+  } catch (error) {
+    console.error('[DB-STORAGE] Error fetching user images:', error);
+    return [];
+  }
+}
+
+// Delete image (for cleanup)
+export async function deleteImage(userId: number, imageId: string): Promise<boolean> {
+  try {
+    console.log(`[DB-STORAGE] Deleting image: ${imageId} for user ${userId}`);
+    
+    // Get image info first
+    const images = await db
+      .select()
+      .from(generatedImages)
+      .where(and(
+        eq(generatedImages.userId, userId),
+        eq(generatedImages.imageId, imageId)
+      ))
+      .limit(1);
+    
+    if (images.length === 0) {
+      console.log(`[DB-STORAGE] Image not found: ${imageId}`);
+      return false;
+    }
+    
+    const image = images[0];
+    
+    // Delete file from filesystem
+    try {
+      if (image.filePath && fs.existsSync(image.filePath)) {
+        fs.unlinkSync(image.filePath);
+        console.log(`[DB-STORAGE] Deleted file: ${image.filePath}`);
+      }
+    } catch (fileError) {
+      console.warn(`[DB-STORAGE] Failed to delete file: ${image.filePath}`, fileError);
+    }
+    
+    // Delete from database
+    await db
+      .delete(generatedImages)
+      .where(eq(generatedImages.id, image.id));
+    
+    console.log(`[DB-STORAGE] Successfully deleted image: ${imageId}`);
+    return true;
+  } catch (error) {
+    console.error('[DB-STORAGE] Error deleting image:', error);
+    return false;
+  }
+}
+
 export const databaseImageStorage = {
   findCachedImage,
   getImageById,
@@ -437,4 +498,6 @@ export const databaseImageStorage = {
   updateImageUsage,
   getUserImageStats,
   cleanupOrphanedRecords,
+  getAllUserImages,
+  deleteImage,
 };

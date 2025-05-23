@@ -36,10 +36,14 @@ interface GenerationLock {
 const recentImageRequests: Map<string, ImageCacheEntry> = new Map();
 // Active generation locks
 const activeGenerations: Map<string, GenerationLock> = new Map();
-// Cache TTL in milliseconds (30 seconds)
-const IMAGE_CACHE_TTL = 30 * 1000;
+// Cache TTL in milliseconds (5 minutes)
+const IMAGE_CACHE_TTL = 5 * 60 * 1000;
 // Lock TTL in milliseconds (5 minutes)
 const GENERATION_LOCK_TTL = 5 * 60 * 1000;
+// Rate limiting: minimum time between image generations per user (2 minutes)
+const MIN_GENERATION_INTERVAL = 2 * 60 * 1000;
+// Track last generation time per user
+const userLastGeneration: Map<string, number> = new Map();
 
 // Helper to clean old cache entries and stale locks
 function cleanupImageCache() {
@@ -225,6 +229,24 @@ async function generateWeatherBackground(req: Request, location: string, weather
   
   console.log(`[BACKGROUND API] Request ${requestId}: ${cacheKey} (forceRefresh: ${forceRefresh})`);
   
+  // Rate limiting check (except for forced refresh)
+  if (!forceRefresh && req.user?.id) {
+    const userId = req.user.id.toString();
+    const lastGenTime = userLastGeneration.get(userId);
+    const now = Date.now();
+    
+    if (lastGenTime && (now - lastGenTime) < MIN_GENERATION_INTERVAL) {
+      const waitTime = Math.ceil((MIN_GENERATION_INTERVAL - (now - lastGenTime)) / 1000);
+      console.log(`[BACKGROUND API] Request ${requestId}: Rate limited - user ${userId} must wait ${waitTime}s`);
+      return res.status(429).json({
+        error: 'rate_limited',
+        message: `Please wait ${waitTime} seconds before generating a new image`,
+        waitTime,
+        cached: false
+      });
+    }
+  }
+  
   // Check for active generation lock (prevent concurrent requests)
   if (!forceRefresh && activeGenerations.has(cacheKey)) {
     const existingLock = activeGenerations.get(cacheKey)!;
@@ -252,6 +274,18 @@ async function generateWeatherBackground(req: Request, location: string, weather
     if (!forceRefresh && req.user?.id) {
       try {
         console.log(`[BACKGROUND API] Checking database for existing image: location="${location}", weather="${weatherCondition}", time="${time}", season="${currentSeason}"`);
+        
+        // Log all available images for this user
+        const allUserImages = await databaseImageStorage.getAllUserImages(req.user.id);
+        console.log(`[BACKGROUND API] Available cached images for user ${req.user.id}:`);
+        if (allUserImages.length === 0) {
+          console.log(`[BACKGROUND API] - No cached images found`);
+        } else {
+          allUserImages.forEach((img, index) => {
+            console.log(`[BACKGROUND API] - ${index + 1}. ${img.imageId}: location="${img.location}", weather="${img.weatherCondition}", time="${img.timeOfDay}", season="${img.season}" (used ${img.usageCount} times)`);
+          });
+        }
+        
         const cachedImage = await databaseImageStorage.findCachedImage(
           req.user.id,
           location,
@@ -263,23 +297,39 @@ async function generateWeatherBackground(req: Request, location: string, weather
         if (cachedImage) {
           console.log(`[BACKGROUND API] Found existing image in database: ${cachedImage.imageId}`);
           
-          // Get image data from filesystem
-          const imageData = databaseImageStorage.getImageData(cachedImage.filePath);
+          try {
+            // Get image data from filesystem
+            const imageData = databaseImageStorage.getImageData(cachedImage.filePath);
           
           // Update usage count
           await databaseImageStorage.updateImageUsage(req.user.id, cachedImage.imageId);
           
-          console.log(`[BACKGROUND API] Returning cached image from database`);
-          return {
-            imageBase64: imageData,
-            imageDataUrl: `data:image/png;base64,${imageData}`,
-            imageId: cachedImage.imageId,
-            prompt: cachedImage.prompt,
-            revisedPrompt: cachedImage.revisedPrompt,
-            cached: true,
-            fromDatabase: true,
-            requestId
-          };
+            console.log(`[BACKGROUND API] Returning cached image from database`);
+            return {
+              imageBase64: imageData,
+              imageDataUrl: `data:image/png;base64,${imageData}`,
+              imageId: cachedImage.imageId,
+              prompt: cachedImage.prompt,
+              revisedPrompt: cachedImage.revisedPrompt,
+              cached: true,
+              fromDatabase: true,
+              requestId
+            };
+          } catch (fileError) {
+            console.error(`[BACKGROUND API] File system error for cached image ${cachedImage.imageId}:`, fileError);
+            console.log(`[BACKGROUND API] Cleaning up orphaned database entry: ${cachedImage.imageId}`);
+            
+            // Clean up orphaned database entry
+            try {
+              await databaseImageStorage.deleteImage(req.user.id, cachedImage.imageId);
+              console.log(`[BACKGROUND API] Successfully cleaned up orphaned entry: ${cachedImage.imageId}`);
+            } catch (cleanupError) {
+              console.error(`[BACKGROUND API] Failed to cleanup orphaned entry:`, cleanupError);
+            }
+            
+            // Continue to generation since cached file is missing
+            console.log(`[BACKGROUND API] Will generate new image due to missing file`);
+          }
         } else {
           console.log(`[BACKGROUND API] No existing image found in database, will generate new one`);
         }
@@ -337,7 +387,13 @@ async function generateWeatherBackground(req: Request, location: string, weather
     // Enhanced prompt with style seasoning and seasonal context
     const prompt = `A beautiful weather scene showing ${weatherCondition} in ${location} during ${time}, ${seasonInfo}, ${randomStyle}. Ultra-high quality, professional composition, perfect lighting.`;
     
-    console.log(`Generating new image for "${cacheKey}" (request ID: ${requestId}) with style: ${randomStyle}`);
+    console.log(`[BACKGROUND API] Generating new image for "${cacheKey}" (request ID: ${requestId}) with style: ${randomStyle}`);
+    
+    // Update last generation time for rate limiting
+    if (req.user?.id) {
+      userLastGeneration.set(req.user.id.toString(), Date.now());
+    }
+    
     const imageResult = await generateImage(prompt, openaiApiKey);
     
     // Generate a unique ID for the image
