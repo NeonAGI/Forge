@@ -48,22 +48,63 @@ export function generateHashKey(location: string, weatherCondition: string, time
 export function saveImageToFile(userId: number, imageId: string, base64Data: string): { filePath: string; fileName: string; fileSize: number } {
   const userImageDir = ensureImageDirectories(userId);
   
-  // Remove data URL prefix if present
-  const base64Image = base64Data.replace(/^data:image\/(png|jpeg|jpg);base64,/, '');
+  // Validate input
+  if (!base64Data || typeof base64Data !== 'string') {
+    throw new Error('Invalid base64 data provided');
+  }
+  
+  // Remove data URL prefix if present (more comprehensive pattern)
+  const base64Image = base64Data.replace(/^data:image\/[a-zA-Z]*;base64,/, '');
+  
+  // Validate base64 format
+  if (!base64Image || base64Image.length < 100) {
+    throw new Error('Base64 data appears to be empty or too short');
+  }
   
   // Generate filename
   const fileName = `${imageId}.png`;
   const filePath = path.join(userImageDir, fileName);
   
-  // Save image file
-  const buffer = Buffer.from(base64Image, 'base64');
-  fs.writeFileSync(filePath, buffer);
-  
-  return {
-    filePath,
-    fileName,
-    fileSize: buffer.length
-  };
+  try {
+    // Save image file
+    const buffer = Buffer.from(base64Image, 'base64');
+    
+    // Validate buffer size
+    if (buffer.length < 1000) {
+      throw new Error('Image buffer appears to be too small, possible encoding issue');
+    }
+    
+    fs.writeFileSync(filePath, buffer);
+    
+    // Verify file was written successfully
+    if (!fs.existsSync(filePath)) {
+      throw new Error('File write verification failed - file does not exist after write');
+    }
+    
+    const actualSize = fs.statSync(filePath).size;
+    if (actualSize !== buffer.length) {
+      throw new Error(`File size mismatch: expected ${buffer.length}, got ${actualSize}`);
+    }
+    
+    console.log(`[DB-STORAGE] Successfully saved image file: ${filePath} (${actualSize} bytes)`);
+    
+    return {
+      filePath,
+      fileName,
+      fileSize: buffer.length
+    };
+  } catch (error) {
+    // Clean up partial file on error
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (cleanupError) {
+      console.warn(`[DB-STORAGE] Failed to cleanup partial file ${filePath}:`, cleanupError);
+    }
+    
+    throw new Error(`Failed to save image file: ${error.message}`);
+  }
 }
 
 // Find cached image by criteria

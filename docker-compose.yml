@@ -37,6 +37,7 @@ services:
     volumes:
       - ./server:/app/server
       - ./shared:/app/shared
+      - ./data:/app/data
       - ./tsconfig.json:/app/tsconfig.json
       - ./vite.config.ts:/app/vite.config.ts
       - ./.env:/app/.env
