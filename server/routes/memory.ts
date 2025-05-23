@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { requireAuth } from '../auth-routes';
+import { requireAuth } from './auth';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { aiMemories } from '../../shared/schema';

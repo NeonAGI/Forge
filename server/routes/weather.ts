@@ -1,8 +1,8 @@
 import { Router, Request, Response } from "express";
-import { requireAuth, getUserApiKey } from '../auth-routes';
+import { requireAuth, getUserApiKey } from './auth';
 import { isPlaceholderKey } from '../utils/env-helpers';
-import { generateImage } from '../openai';
-import { databaseImageStorage } from '../database-image-storage';
+import { generateImage } from '../services/openai.service';
+import { databaseImageStorage } from '../services/image-storage.service';
 
 const router = Router();
 

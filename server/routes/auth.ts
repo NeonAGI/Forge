@@ -1,12 +1,12 @@
 import express from 'express';
-import { registerUser, loginUser, deleteSession, requireAuth, optionalAuth, encryptApiKey, decryptApiKey } from './auth';
+import { registerUser, loginUser, deleteSession, requireAuth, optionalAuth, encryptApiKey, decryptApiKey } from '../auth';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
 import postgres from 'postgres';
 import { userApiKeys, userSettings } from '@shared/schema';
 
 // Re-export auth functions for use in other files
-export { requireAuth, optionalAuth } from './auth';
+export { requireAuth, optionalAuth } from '../auth';
 
 const router = express.Router();
 

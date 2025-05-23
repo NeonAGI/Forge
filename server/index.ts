@@ -7,7 +7,7 @@ import { WebSocketServer } from 'ws';
 import { Server } from 'http';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import authRoutes from './auth-routes';
+import authRoutes from './routes/auth';
 // Import modular route modules
 import weatherRoutes from './routes/weather';
 import imageRoutes from './routes/images';

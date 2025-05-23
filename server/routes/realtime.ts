@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { requireAuth, getUserApiKey } from '../auth-routes';
+import { requireAuth, getUserApiKey } from './auth';
 import { isPlaceholderKey } from '../utils/env-helpers';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
-import { requireAuth } from '../auth-routes';
-import { databaseImageStorage } from '../database-image-storage';
+import { requireAuth } from './auth';
+import { databaseImageStorage } from '../services/image-storage.service';
 
 const router = Router();
 
