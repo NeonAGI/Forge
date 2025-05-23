@@ -7,97 +7,21 @@ import { WebSocketServer } from 'ws';
 import { Server } from 'http';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import router from './routes';
 import authRoutes from './auth-routes';
+// Import modular route modules
+import weatherRoutes from './routes/weather';
+import imageRoutes from './routes/images';
+import searchRoutes from './routes/search';
+import memoryRoutes from './routes/memory';
+import realtimeRoutes from './routes/realtime';
+import calendarRoutes from './routes/calendar';
+import assistantRoutes from './routes/assistant';
 import fetch from 'node-fetch';
-import { isPlaceholderKey } from './utils/env-helpers';
+import { loadEnvFromPossibleLocations, testApiConnections } from './utils/environment';
 
 // Function to get ESM __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Load environment variables from different possible .env locations
-function loadEnvFromPossibleLocations() {
-  // Array of possible .env file locations relative to current file
-  const possibleEnvPaths = [
-    path.resolve(__dirname, '../.env'),          // server/index.ts level (../
-    path.resolve(__dirname, '../../.env'),       // project root level (../../
-    path.resolve(__dirname, '../../../.env'),    // One level up from project root
-    path.resolve(__dirname, './.env'),           // In server directory directly
-    path.resolve(process.cwd(), '.env')          // Current working directory
-  ];
-  
-  // Try each path until one works
-  for (const envPath of possibleEnvPaths) {
-    console.log(`Trying to load .env from: ${envPath}`);
-    
-    const result = dotenv.config({ path: envPath });
-    if (!result.error) {
-      console.log(`Successfully loaded .env from: ${envPath}`);
-      // Log all available environment variables (for debugging)
-      console.log('Environment variables:');
-      console.log('WEATHER_API_KEY available:', !!process.env.WEATHER_API_KEY);
-      console.log('OPENAI_API_KEY available:', !!process.env.OPENAI_API_KEY);
-      console.log('NODE_ENV:', process.env.NODE_ENV);
-      return true;
-    }
-  }
-  
-  // If we got here, none of the paths worked
-  console.warn('Failed to load .env file from any location. Using environment variables directly.');
-  return false;
-}
-
-// Function to test API connections
-async function testApiConnections() {
-  console.log('Testing API connections on startup...');
-  
-  // Test OpenAI API
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-  if (openaiApiKey && !isPlaceholderKey(openaiApiKey)) {
-    try {
-      console.log('Testing OpenAI API connection...');
-      const response = await fetch('https://api.openai.com/v1/models', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${openaiApiKey}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        console.log('✅ OpenAI API connection successful!');
-      } else {
-        console.error('❌ OpenAI API connection failed:', response.status, response.statusText);
-      }
-    } catch (error) {
-      console.error('❌ Error testing OpenAI API:', error);
-    }
-  } else {
-    console.warn('⚠️ OpenAI API key not set or using placeholder value. Skipping connection test.');
-  }
-  
-  // Test Weather API
-  const weatherApiKey = process.env.WEATHER_API_KEY;
-  if (weatherApiKey && !isPlaceholderKey(weatherApiKey)) {
-    try {
-      console.log('Testing Weather API connection...');
-      const response = await fetch(`https://api.weatherapi.com/v1/current.json?key=${weatherApiKey}&q=London&aqi=no`);
-      
-      if (response.ok) {
-        console.log('✅ Weather API connection successful!');
-      } else {
-        console.error('❌ Weather API connection failed:', response.status, response.statusText);
-      }
-    } catch (error) {
-      console.error('❌ Error testing Weather API:', error);
-    }
-  } else {
-    console.warn('⚠️ Weather API key not set or using placeholder value. Skipping connection test.');
-  }
-  
-  console.log('API connection tests completed.');
-}
 
 // Load env vars from .env file
 loadEnvFromPossibleLocations();
@@ -117,11 +41,25 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+// Request logging middleware
+app.use('/api', (req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 // Authentication routes
 app.use('/api/auth', authRoutes);
 
-// Main API routes
-app.use('/api', router);
+// Modular API routes
+app.use('/api/weather', weatherRoutes); // /api/weather endpoints
+app.use('/api/images', imageRoutes);   // /api/images endpoints
+app.use('/api/search', searchRoutes);   // /api/search endpoints
+app.use('/api/memories', memoryRoutes); // /api/memories endpoints
+app.use('/api/memory', memoryRoutes);   // /api/memory endpoints (agent compatibility)
+app.use('/api/realtime', realtimeRoutes); // /api/realtime endpoints
+app.use('/api', realtimeRoutes);             // /api/session, /api/time endpoints
+app.use('/api/calendar', calendarRoutes); // /api/calendar endpoints
+app.use('/api/assistant', assistantRoutes); // /api/assistant endpoints
 
 // Only serve static files and handle client routing in production
 if (process.env.NODE_ENV === 'production') {
