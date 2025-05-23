@@ -432,12 +432,14 @@ export async function cleanupOrphanedRecords(userId?: number): Promise<void> {
 // Get all images for a user (for logging/debugging)
 export async function getAllUserImages(userId: number): Promise<GeneratedImage[]> {
   try {
+    console.log(`[DB-STORAGE] getAllUserImages called for user ${userId}`);
     const images = await db
       .select()
       .from(generatedImages)
       .where(eq(generatedImages.userId, userId))
       .orderBy(desc(generatedImages.updatedAt));
     
+    console.log(`[DB-STORAGE] Found ${images.length} images for user ${userId}`);
     return images;
   } catch (error) {
     console.error('[DB-STORAGE] Error fetching user images:', error);

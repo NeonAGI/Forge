@@ -276,14 +276,19 @@ async function generateWeatherBackground(req: Request, location: string, weather
         console.log(`[BACKGROUND API] Checking database for existing image: location="${location}", weather="${weatherCondition}", time="${time}", season="${currentSeason}"`);
         
         // Log all available images for this user
-        const allUserImages = await databaseImageStorage.getAllUserImages(req.user.id);
-        console.log(`[BACKGROUND API] Available cached images for user ${req.user.id}:`);
-        if (allUserImages.length === 0) {
-          console.log(`[BACKGROUND API] - No cached images found`);
-        } else {
-          allUserImages.forEach((img, index) => {
-            console.log(`[BACKGROUND API] - ${index + 1}. ${img.imageId}: location="${img.location}", weather="${img.weatherCondition}", time="${img.timeOfDay}", season="${img.season}" (used ${img.usageCount} times)`);
-          });
+        console.log(`[BACKGROUND API] Fetching all cached images for user ${req.user.id}...`);
+        try {
+          const allUserImages = await databaseImageStorage.getAllUserImages(req.user.id);
+          console.log(`[BACKGROUND API] Available cached images for user ${req.user.id} (total: ${allUserImages.length}):`);
+          if (allUserImages.length === 0) {
+            console.log(`[BACKGROUND API] - No cached images found`);
+          } else {
+            allUserImages.forEach((img, index) => {
+              console.log(`[BACKGROUND API] - ${index + 1}. ${img.imageId}: location="${img.location}", weather="${img.weatherCondition}", time="${img.timeOfDay}", season="${img.season || 'unknown'}" (used ${img.usageCount || 0} times)`);
+            });
+          }
+        } catch (fetchError) {
+          console.error(`[BACKGROUND API] Error fetching user images:`, fetchError);
         }
         
         const cachedImage = await databaseImageStorage.findCachedImage(
