@@ -29,11 +29,14 @@ export function useWeatherBackground() {
   const [isAutoLoading, setIsAutoLoading] = useState(false);
   // Add attempts counter to track if we should keep trying
   const autoLoadAttempts = useRef(0);
-  const maxAttempts = 5; // Maximum number of retries
+  const maxAttempts = 3; // Reduced from 5 to prevent excessive attempts
   const lastGenerationKey = useRef<string | null>(null);
   // Debouncing and request management
   const activeRequests = useRef<Map<string, Promise<any>>>(new Map());
   const debounceTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
+  // Track when we last generated to prevent rapid regeneration
+  const lastGenerationTime = useRef<number>(0);
+  const MIN_GENERATION_INTERVAL = 30000; // 30 seconds minimum between generations
 
   // Helper function to determine weather description
   const getWeatherDescription = (weatherCode: string) => {
@@ -148,7 +151,7 @@ export function useWeatherBackground() {
     }
   }, []);
   
-  // Actual generation execution
+  // Stable generation execution with minimal dependencies
   const executeGeneration = useCallback(async (options: GenerateBackgroundOptions, forceRefresh: boolean, generationKey: string, season: string) => {
     console.log(`[CLIENT] Executing generation for: ${generationKey} (force: ${forceRefresh})`);
     
@@ -344,7 +347,7 @@ export function useWeatherBackground() {
     }
     
     return requestPromise;
-  }, []);
+  }, []); // Minimal dependencies - only recreate if absolutely necessary
   
   // Function to force refresh the current background
   const forceRefreshBackground = useCallback(async (customLocation?: string) => {
@@ -380,10 +383,17 @@ export function useWeatherBackground() {
     localStorage.removeItem(BACKGROUND_REF_KEY);
   }, []);
   
-  // Auto-load a background image on mount that matches current conditions
+  // Stable auto-load effect with proper conditions
   useEffect(() => {
     // Only attempt auto-loading if we haven't done it successfully yet, and if we haven't exceeded max attempts
     if (hasAutoLoaded || autoLoadAttempts.current >= maxAttempts) return;
+    
+    // Only auto-load if we don't already have a background image
+    if (backgroundImage) {
+      console.log('[CLIENT] Already have background image, marking auto-load as complete');
+      setHasAutoLoaded(true);
+      return;
+    }
     
     const loadBackgroundImage = async () => {
       // Prevent multiple simultaneous auto-loads
@@ -432,6 +442,14 @@ export function useWeatherBackground() {
       // Check if we should update based on time gating
       if (!shouldUpdateBackground(currentConditions)) {
         console.log(`[CLIENT] Background update not needed - conditions match and image is recent`);
+        setHasAutoLoaded(true);
+        setIsAutoLoading(false);
+        return;
+      }
+      
+      // Additional check: if we already have a background image, don't auto-generate unless conditions changed
+      if (backgroundImage && !shouldUpdateBackground(currentConditions)) {
+        console.log(`[CLIENT] Already have background image, skipping auto-generation`);
         setHasAutoLoaded(true);
         setIsAutoLoading(false);
         return;
@@ -545,7 +563,7 @@ export function useWeatherBackground() {
     };
     
     loadBackgroundImage();
-  }, [hasAutoLoaded, isAutoLoading, isLoading, currentWeather, location, generateBackground]);
+  }, [hasAutoLoaded, isAutoLoading, isLoading]); // Removed currentWeather, location to prevent excessive regeneration
   
   // Cleanup on unmount
   useEffect(() => {

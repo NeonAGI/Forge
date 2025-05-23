@@ -328,16 +328,32 @@ export function getImageData(filePath: string): string {
 // Update image usage count
 export async function updateImageUsage(userId: number, imageId: string): Promise<void> {
   try {
-    await db
-      .update(generatedImages)
-      .set({
-        useCount: generatedImages.useCount + 1,
-        lastUsedAt: new Date(),
-      })
+    // First get the current image to read the current use count
+    const currentImage = await db
+      .select()
+      .from(generatedImages)
       .where(and(
         eq(generatedImages.userId, userId),
         eq(generatedImages.imageId, imageId)
-      ));
+      ))
+      .limit(1);
+
+    if (currentImage.length > 0) {
+      const newUseCount = (currentImage[0].useCount || 0) + 1;
+      
+      await db
+        .update(generatedImages)
+        .set({
+          useCount: newUseCount,
+          lastUsedAt: new Date(),
+        })
+        .where(and(
+          eq(generatedImages.userId, userId),
+          eq(generatedImages.imageId, imageId)
+        ));
+        
+      console.log(`[DB-STORAGE] Updated usage count for ${imageId}: ${newUseCount}`);
+    }
   } catch (error) {
     console.error('[DB-STORAGE] Error updating image usage:', error);
   }

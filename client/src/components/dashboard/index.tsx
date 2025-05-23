@@ -70,10 +70,10 @@ export const Dashboard: React.FC = () => {
     return 'night'; // 0-5 hours
   };
 
-  // Handle generating a new background image
-  const handleRefreshBackground = async () => {
+  // Handle generating a new background image (for manual refresh button)
+  const handleForceRefreshBackground = async () => {
     if (!isLoading && currentWeather && location) {
-      console.log("Refreshing background image for:", location);
+      console.log("Force refreshing background image for:", location);
       
       // Use consistent time quarter logic
       const timeOfDay = getCurrentTimeQuarter();
@@ -81,7 +81,7 @@ export const Dashboard: React.FC = () => {
       
       // Always use user's settings location for background generation, never the weather API response location
       const userLocation = userSettings?.location || 'Fort Smith, AR'; // Fallback to user's preferred location
-      console.log(`Generating background with: user_location=${userLocation}, api_location=${location}, weather=${weatherCondition}, time=${timeOfDay}`);
+      console.log(`Force generating background with: user_location=${userLocation}, api_location=${location}, weather=${weatherCondition}, time=${timeOfDay}`);
       
       try {
         // Force refresh the background using user's actual location
@@ -89,6 +89,51 @@ export const Dashboard: React.FC = () => {
         
         // Log background status and force repaint if needed
         console.log("Background generation completed. Image loaded:", backgroundImage ? "Yes" : "No");
+        
+        if (!backgroundImage) {
+          // If backgroundImage isn't set immediately, try refreshing after a short delay
+          setTimeout(() => {
+            console.log("Checking background image after delay:", backgroundImage ? "Image loaded" : "Still no image");
+            // Force a re-render by updating a state variable
+            setShowErrorToast(prev => {
+              setTimeout(() => setShowErrorToast(false), 100);
+              return true;
+            });
+          }, 1000);
+        }
+      } catch (error) {
+        console.error("Error refreshing background:", error);
+        setShowErrorToast(true);
+        setTimeout(() => setShowErrorToast(false), 5000);
+      }
+    } else {
+      console.warn("Cannot refresh background: weather data not loaded or location missing");
+    }
+  };
+
+  // Handle initial background generation (uses cache when possible)
+  const handleInitialBackgroundLoad = async () => {
+    if (!isLoading && currentWeather && location) {
+      console.log("Loading initial background image for:", location);
+      
+      // Use consistent time quarter logic
+      const timeOfDay = getCurrentTimeQuarter();
+      const weatherCondition = getWeatherCondition(currentWeather.weatherCode);
+      
+      // Always use user's settings location for background generation, never the weather API response location
+      const userLocation = userSettings?.location || 'Fort Smith, AR'; // Fallback to user's preferred location
+      console.log(`Loading background with: user_location=${userLocation}, api_location=${location}, weather=${weatherCondition}, time=${timeOfDay}`);
+      
+      try {
+        // Generate background using user's actual location (will use cache if available)
+        await generateBackground({
+          location: userLocation,
+          weatherCondition,
+          time: timeOfDay
+        });
+        
+        // Log background status and force repaint if needed
+        console.log("Background loading completed. Image loaded:", backgroundImage ? "Yes" : "No");
         
         if (!backgroundImage) {
           // If backgroundImage isn't set immediately, try refreshing after a short delay
@@ -120,14 +165,15 @@ export const Dashboard: React.FC = () => {
     }
   }, [backgroundError]);
   
-  // Ensure background is generated as soon as weather data is available
+  // Only generate background once when weather data first becomes available
   useEffect(() => {
+    // Removed weather/location dependencies to prevent regeneration on every update
     if (!isLoading && currentWeather && location && !backgroundImage && !isGenerating && !hasManuallyTriggeredBg.current) {
-      console.log("Manually triggering background generation since weather data is now available");
+      console.log("Triggering initial background loading since weather data is now available");
       hasManuallyTriggeredBg.current = true;
-      handleRefreshBackground();
+      handleInitialBackgroundLoad();
     }
-  }, [isLoading, currentWeather, location]);
+  }, [isLoading, backgroundImage, isGenerating]); // Removed currentWeather, location to prevent excessive regeneration
   
   // Helper function to determine weather condition from code
   function getWeatherCondition(weatherCode: string) {
@@ -244,7 +290,7 @@ export const Dashboard: React.FC = () => {
         // setBackgroundStyle({ backgroundImage: `url(${darkCloudyEveningBg})` });
       }
     }
-  }, [currentWeather, isLoading, backgroundImage]);
+  }, [backgroundImage]); // Only depend on backgroundImage to prevent excessive re-runs
 
   // Toggle settings panel
   const toggleSettings = () => {
@@ -254,9 +300,9 @@ export const Dashboard: React.FC = () => {
   // Handle settings panel close
   const handleSettingsClose = () => {
     setShowSettings(false);
-    // Refresh weather data when settings are closed
-    // (in case the location was changed)
-    refreshWeather();
+    // Only refresh weather if location actually changed
+    // This prevents unnecessary background regeneration
+    // refreshWeather(); // Commented out - let user manually refresh if needed
   };
 
   return (
@@ -302,7 +348,7 @@ export const Dashboard: React.FC = () => {
                 backgroundColor: colorPalette ? colorPalette.primaryRgba(0.1) : 'rgba(255, 255, 255, 0.1)',
                 borderColor: colorPalette ? colorPalette.primaryRgba(0.2) : 'rgba(255, 255, 255, 0.2)'
               }}
-              onClick={handleRefreshBackground}
+              onClick={handleForceRefreshBackground}
               disabled={isGenerating || isLoading}
             >
               <RefreshCw className={`h-5 w-5 ${isGenerating ? 'animate-spin' : ''}`} />
