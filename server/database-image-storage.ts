@@ -93,7 +93,21 @@ export async function findCachedImage(
 
     if (image.length > 0) {
       console.log(`[DB-STORAGE] Found cached image with hash key: ${hashKey}`);
-      return image[0];
+      
+      // Validate file exists before returning
+      if (image[0].filePath && fs.existsSync(image[0].filePath)) {
+        console.log(`[DB-STORAGE] File exists, returning cached image: ${image[0].imageId}`);
+        return image[0];
+      } else {
+        console.log(`[DB-STORAGE] File missing for ${image[0].imageId}, cleaning up orphaned entry`);
+        try {
+          await deleteImage(userId, image[0].imageId);
+          console.log(`[DB-STORAGE] Successfully cleaned up orphaned entry: ${image[0].imageId}`);
+        } catch (cleanupError) {
+          console.error(`[DB-STORAGE] Failed to cleanup orphaned entry:`, cleanupError);
+        }
+        // Continue to fallback search
+      }
     }
 
     // Fallback to manual matching (for backward compatibility)
@@ -119,7 +133,20 @@ export async function findCachedImage(
 
     if (image.length > 0) {
       console.log(`[DB-STORAGE] Found cached image with manual matching`);
-      return image[0];
+      
+      // Validate file exists before returning
+      if (image[0].filePath && fs.existsSync(image[0].filePath)) {
+        console.log(`[DB-STORAGE] File exists, returning manually matched image: ${image[0].imageId}`);
+        return image[0];
+      } else {
+        console.log(`[DB-STORAGE] File missing for manually matched ${image[0].imageId}, cleaning up orphaned entry`);
+        try {
+          await deleteImage(userId, image[0].imageId);
+          console.log(`[DB-STORAGE] Successfully cleaned up orphaned entry: ${image[0].imageId}`);
+        } catch (cleanupError) {
+          console.error(`[DB-STORAGE] Failed to cleanup orphaned entry:`, cleanupError);
+        }
+      }
     }
 
     console.log(`[DB-STORAGE] No cached image found`);
@@ -492,6 +519,40 @@ export async function deleteImage(userId: number, imageId: string): Promise<bool
   }
 }
 
+// Bulk cleanup of all orphaned database entries for a user
+export async function cleanupAllOrphanedEntries(userId: number): Promise<number> {
+  try {
+    console.log(`[DB-STORAGE] Starting bulk cleanup of orphaned entries for user ${userId}`);
+    
+    const allImages = await db
+      .select()
+      .from(generatedImages)
+      .where(eq(generatedImages.userId, userId));
+    
+    let cleanedCount = 0;
+    
+    for (const image of allImages) {
+      if (!image.filePath || !fs.existsSync(image.filePath)) {
+        console.log(`[DB-STORAGE] Cleaning up orphaned entry: ${image.imageId} (missing file: ${image.filePath || 'no path'})`);
+        try {
+          await db
+            .delete(generatedImages)
+            .where(eq(generatedImages.id, image.id));
+          cleanedCount++;
+        } catch (deleteError) {
+          console.error(`[DB-STORAGE] Failed to delete orphaned entry ${image.imageId}:`, deleteError);
+        }
+      }
+    }
+    
+    console.log(`[DB-STORAGE] Bulk cleanup completed: removed ${cleanedCount} orphaned entries for user ${userId}`);
+    return cleanedCount;
+  } catch (error) {
+    console.error('[DB-STORAGE] Error during bulk cleanup:', error);
+    return 0;
+  }
+}
+
 export const databaseImageStorage = {
   findCachedImage,
   getImageById,
@@ -502,4 +563,5 @@ export const databaseImageStorage = {
   cleanupOrphanedRecords,
   getAllUserImages,
   deleteImage,
+  cleanupAllOrphanedEntries,
 };

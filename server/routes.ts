@@ -538,6 +538,18 @@ router.post('/weather/background', requireAuth, async (req: Request, res: Respon
     // Check if this is a manual refresh request
     const forceRefresh = req.body.forceRefresh === true;
 
+    // Run bulk cleanup of orphaned entries before searching for cached images
+    if (!forceRefresh) {
+      try {
+        const cleanedCount = await databaseImageStorage.cleanupAllOrphanedEntries(user.id);
+        if (cleanedCount > 0) {
+          console.log(`[BACKGROUND API] Cleaned up ${cleanedCount} orphaned entries before searching for cached images`);
+        }
+      } catch (cleanupError) {
+        console.warn(`[BACKGROUND API] Cleanup failed but continuing:`, cleanupError);
+      }
+    }
+
     // Generate the image using the shared function with user's API key
     return await generateWeatherBackground(req, location, weatherCondition, time, res, userApiKey, forceRefresh);
   } catch (error: any) {
@@ -592,6 +604,32 @@ router.get('/images/:imageId', requireAuth, async (req: Request, res: Response) 
   } catch (error) {
     console.error('[IMAGES API] Error retrieving image:', error);
     res.status(500).json({ error: 'Failed to retrieve image' });
+  }
+});
+
+// Manual cleanup endpoint for debugging
+router.post('/images/cleanup', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    console.log(`[CLEANUP API] Manual cleanup requested for user ${user.id}`);
+    
+    const cleanedCount = await databaseImageStorage.cleanupAllOrphanedEntries(user.id);
+    
+    // Also get current stats after cleanup
+    const stats = await databaseImageStorage.getUserImageStats(user.id);
+    const allImages = await databaseImageStorage.getAllUserImages(user.id);
+    
+    console.log(`[CLEANUP API] Cleanup completed: removed ${cleanedCount} orphaned entries`);
+    
+    res.json({
+      cleanedCount,
+      remainingImages: allImages.length,
+      stats,
+      message: `Successfully cleaned up ${cleanedCount} orphaned database entries`
+    });
+  } catch (error) {
+    console.error('[CLEANUP API] Error during manual cleanup:', error);
+    res.status(500).json({ error: 'Failed to cleanup orphaned entries', details: error.message });
   }
 });
 
