@@ -13,6 +13,15 @@ import { generateImage } from './openai';
 import { isPlaceholderKey } from './utils/env-helpers';
 import { requireAuth, optionalAuth, getUserApiKey } from './auth-routes';
 import { databaseImageStorage } from './database-image-storage';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { aiMemories, conversations, messages, userSettings } from '../shared/schema';
+import { eq, desc, and, or, like, gt } from 'drizzle-orm';
+
+// Database connection for memory management
+const connectionString = process.env.DATABASE_URL || 'postgresql://forge:forge_password@localhost:5432/forge';
+const client = postgres(connectionString);
+const db = drizzle(client);
 
 // Get directory path in ESM context
 const __filename = fileURLToPath(import.meta.url);
@@ -103,7 +112,11 @@ router.use((req, res, next) => {
 // Weather API endpoint
 router.get('/weather', async (req: Request, res: Response) => {
   try {
-    console.log('Weather API request received with query params:', JSON.stringify(req.query));
+    console.log('🌤️  WEATHER API CALLED BY AGENT:', {
+      params: req.query,
+      timestamp: new Date().toISOString(),
+      userAgent: req.headers['user-agent'] || 'unknown'
+    });
     
     // Check if the API key is available
     const apiKey = process.env.WEATHER_API_KEY;
@@ -198,7 +211,13 @@ router.get('/weather', async (req: Request, res: Response) => {
       location: `${data.location.name}${data.location.region ? ', ' + data.location.region : ''}, ${data.location.country}`
     };
     
-    console.log(`Returning weather data for: ${formattedData.location} with unit: ${formattedData.currentWeather.unit}`);
+    console.log('✅ WEATHER DATA RETURNED TO AGENT:', {
+      location: formattedData.location,
+      temperature: formattedData.currentWeather.temperature + formattedData.currentWeather.unit,
+      condition: formattedData.currentWeather.description,
+      forecastDays: formattedData.dailyForecast.length,
+      timestamp: new Date().toISOString()
+    });
     res.json(formattedData);
   } catch (error: any) {
     console.error('Error in weather API:', error);
@@ -633,6 +652,571 @@ router.post('/images/cleanup', requireAuth, async (req: Request, res: Response) 
   }
 });
 
+// AI Memory Management API endpoints
+router.get("/memories", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { type, limit = 20, importance_min = 1 } = req.query;
+    
+    let query = db.select().from(aiMemories).where(eq(aiMemories.userId, user.id));
+    
+    if (type) {
+      query = query.where(eq(aiMemories.memoryType, type as string));
+    }
+    
+    if (importance_min) {
+      query = query.where(gt(aiMemories.importance, parseInt(importance_min as string)));
+    }
+    
+    const memories = await query
+      .orderBy(desc(aiMemories.importance), desc(aiMemories.createdAt))
+      .limit(parseInt(limit as string));
+    
+    res.json({ memories });
+  } catch (error: any) {
+    console.error('Error fetching AI memories:', error);
+    res.status(500).json({ error: 'Failed to fetch memories', details: error.message });
+  }
+});
+
+router.post("/memories", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { memoryType, content, importance = 5, tags = [], expiresAt } = req.body;
+    
+    if (!memoryType || !content) {
+      return res.status(400).json({ error: 'memoryType and content are required' });
+    }
+    
+    const memoryData = {
+      userId: user.id,
+      memoryType,
+      content,
+      importance: Math.max(1, Math.min(10, importance)), // Clamp between 1-10
+      tags,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+    };
+    
+    const [newMemory] = await db.insert(aiMemories).values(memoryData).returning();
+    
+    console.log(`Created new AI memory for user ${user.id}: ${memoryType} - ${content.substring(0, 50)}...`);
+    
+    res.json({ memory: newMemory });
+  } catch (error: any) {
+    console.error('Error creating AI memory:', error);
+    res.status(500).json({ error: 'Failed to create memory', details: error.message });
+  }
+});
+
+router.delete("/memories/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { id } = req.params;
+    
+    const [deletedMemory] = await db
+      .delete(aiMemories)
+      .where(and(eq(aiMemories.id, parseInt(id)), eq(aiMemories.userId, user.id)))
+      .returning();
+    
+    if (!deletedMemory) {
+      return res.status(404).json({ error: 'Memory not found' });
+    }
+    
+    res.json({ message: 'Memory deleted successfully' });
+  } catch (error: any) {
+    console.error('Error deleting AI memory:', error);
+    res.status(500).json({ error: 'Failed to delete memory', details: error.message });
+  }
+});
+
+// Get relevant memories for AI context
+router.post("/memories/relevant", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { query, limit = 5 } = req.body;
+    
+    if (!query) {
+      return res.status(400).json({ error: 'Query is required' });
+    }
+    
+    // Simple relevance search - in production, you might use vector search
+    const relevantMemories = await db
+      .select()
+      .from(aiMemories)
+      .where(
+        and(
+          eq(aiMemories.userId, user.id),
+          or(
+            like(aiMemories.content, `%${query}%`),
+            like(aiMemories.memoryType, `%${query}%`)
+          )
+        )
+      )
+      .orderBy(desc(aiMemories.importance), desc(aiMemories.createdAt))
+      .limit(limit);
+    
+    res.json({ memories: relevantMemories });
+  } catch (error: any) {
+    console.error('Error searching relevant memories:', error);
+    res.status(500).json({ error: 'Failed to search memories', details: error.message });
+  }
+});
+
+// Get user context for AI (memories summary)
+router.get("/user-context", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    
+    // Get recent high-importance memories
+    const recentMemories = await db
+      .select()
+      .from(aiMemories)
+      .where(and(
+        eq(aiMemories.userId, user.id),
+        gt(aiMemories.importance, 5)
+      ))
+      .orderBy(desc(aiMemories.importance), desc(aiMemories.createdAt))
+      .limit(10);
+    
+    // Format memories for AI context
+    const memoryContext = recentMemories.map(memory => 
+      `[${memory.memoryType}] ${memory.content}`
+    ).join('\n');
+    
+    res.json({ 
+      memoryContext,
+      memoryCount: recentMemories.length,
+      memories: recentMemories
+    });
+    
+  } catch (error: any) {
+    console.error('Error fetching user context:', error);
+    res.status(500).json({ error: 'Failed to fetch user context', details: error.message });
+  }
+});
+
+// Web search API endpoint with OpenAI native search as primary
+router.post("/search", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { query, num_results = 5 } = req.body;
+    
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ error: 'Query parameter is required and must be a string' });
+    }
+    
+    console.log('🔍 WEB SEARCH API CALLED BY AGENT:', {
+      query: query,
+      numResults: num_results,
+      timestamp: new Date().toISOString(),
+      userAgent: req.headers['user-agent'] || 'unknown'
+    });
+    
+    let results: any[] = [];
+    let searchMethod = 'unknown';
+    
+    // Get user's OpenAI API key for native search
+    let openaiApiKey: string | null = null;
+    if (req.user?.id) {
+      try {
+        openaiApiKey = await getUserApiKey(req.user.id, 'openai');
+      } catch (error) {
+        console.log('[SEARCH API] No user OpenAI API key found');
+      }
+    }
+    
+    // Try OpenAI native web search first (primary method)
+    if (openaiApiKey && !isPlaceholderKey(openaiApiKey)) {
+      try {
+        console.log('[SEARCH API] Using OpenAI native web search as primary method');
+        
+        // Get user location for geographic relevance
+        let userLocation = null;
+        try {
+          const settingsRecords = await db
+            .select()
+            .from(userSettings)
+            .where(eq(userSettings.userId, req.user.id))
+            .limit(1);
+          
+          if (settingsRecords.length > 0 && settingsRecords[0].location) {
+            userLocation = settingsRecords[0].location;
+          }
+        } catch (settingsError) {
+          console.log('[SEARCH API] Could not get user location for search context');
+        }
+        
+        // Prepare OpenAI web search request
+        const searchTools = [{
+          type: "web_search_preview",
+          search_context_size: "medium" // Balance quality, cost, and latency
+        }];
+        
+        // Add user location if available
+        if (userLocation) {
+          try {
+            // Parse location to extract components
+            const locationParts = userLocation.split(',').map(part => part.trim());
+            if (locationParts.length >= 2) {
+              const city = locationParts[0];
+              const region = locationParts[1];
+              
+              searchTools[0].user_location = {
+                type: "approximate",
+                city: city,
+                region: region
+              };
+              
+              // Try to determine country code from region
+              const regionLower = region.toLowerCase();
+              if (regionLower.includes('us') || regionLower.includes('usa') || regionLower.includes('united states')) {
+                searchTools[0].user_location.country = "US";
+              } else if (regionLower.includes('uk') || regionLower.includes('united kingdom') || regionLower.includes('england')) {
+                searchTools[0].user_location.country = "GB";
+              } else if (regionLower.includes('canada')) {
+                searchTools[0].user_location.country = "CA";
+              }
+            }
+          } catch (locationParseError) {
+            console.log('[SEARCH API] Could not parse user location for geographic search');
+          }
+        }
+        
+        const openaiResponse = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openaiApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: "gpt-4.1",
+            tools: searchTools,
+            input: query,
+            tool_choice: { type: "web_search_preview" } // Force web search for lower latency
+          }),
+          signal: AbortSignal.timeout(15000) // 15 second timeout for OpenAI search
+        });
+        
+        if (openaiResponse.ok) {
+          const openaiData = await openaiResponse.json();
+          
+          // Debug: Log the full OpenAI response structure
+          console.log('[SEARCH API] OpenAI response structure:', JSON.stringify(openaiData, null, 2));
+          
+          // Extract search results and citations from OpenAI response
+          if (openaiData.output && openaiData.output.length > 0) {
+            let searchText = '';
+            let citations: any[] = [];
+            
+            console.log(`[SEARCH API] Processing ${openaiData.output.length} output items`);
+            
+            // Find the message content with text and annotations
+            for (const item of openaiData.output) {
+              console.log(`[SEARCH API] Processing item type: ${item.type}`);
+              
+              if (item.type === 'message' && item.content && item.content.length > 0) {
+                console.log(`[SEARCH API] Found message with ${item.content.length} content items`);
+                
+                const textContent = item.content.find(c => c.type === 'output_text');
+                if (textContent) {
+                  searchText = textContent.text || '';
+                  citations = textContent.annotations || [];
+                  console.log(`[SEARCH API] Extracted text length: ${searchText.length}, citations: ${citations.length}`);
+                  break;
+                }
+              }
+              
+              // Also check for direct text in content array
+              if (item.content && Array.isArray(item.content)) {
+                for (const contentItem of item.content) {
+                  if (contentItem.type === 'text' && contentItem.text) {
+                    searchText = contentItem.text;
+                    citations = contentItem.annotations || [];
+                    console.log(`[SEARCH API] Found direct text content: ${searchText.length} chars, ${citations.length} annotations`);
+                    break;
+                  }
+                }
+              }
+            }
+            
+            // Also check the top-level output_text field (alternative response format)
+            if (!searchText && openaiData.output_text) {
+              searchText = openaiData.output_text;
+              console.log(`[SEARCH API] Using top-level output_text: ${searchText.length} chars`);
+            }
+            
+            console.log(`[SEARCH API] Final extracted: text=${searchText.length} chars, citations=${citations.length}`);
+            
+            // Format results from citations
+            if (citations.length > 0) {
+              results = citations
+                .filter(citation => citation.type === 'url_citation' && citation.url && citation.title)
+                .slice(0, num_results)
+                .map((citation, index) => ({
+                  title: citation.title,
+                  url: citation.url,
+                  snippet: searchText.substring(citation.start_index || 0, citation.end_index || (citation.start_index || 0) + 200),
+                  source: new URL(citation.url).hostname,
+                  citation_index: index + 1
+                }));
+              
+              console.log(`[SEARCH API] Formatted ${results.length} results from citations`);
+            }
+            
+            // If we have text but no citations, create a single result with the AI response
+            if (searchText.length > 50 && results.length === 0) {
+              results = [{
+                title: `AI Answer for "${query}"`,
+                url: `https://openai.com/search`,
+                snippet: searchText.length > 400 ? searchText.substring(0, 400) + '...' : searchText,
+                source: 'OpenAI Web Search',
+                is_ai_answer: true
+              }];
+              console.log(`[SEARCH API] Created AI answer result from text response`);
+            }
+            
+            // If we got good results, add a summary at the beginning
+            if (results.length > 0 && searchText.length > 100 && !results.some(r => r.is_ai_answer)) {
+              results.unshift({
+                title: `AI Summary for "${query}"`,
+                url: `https://openai.com/search`,
+                snippet: searchText.length > 300 ? searchText.substring(0, 300) + '...' : searchText,
+                source: 'OpenAI Web Search',
+                is_summary: true
+              });
+            }
+            
+            if (results.length > 0) {
+              searchMethod = 'openai';
+              console.log(`[SEARCH API] OpenAI native search returned ${results.length} results`);
+            } else {
+              console.log(`[SEARCH API] OpenAI native search returned 0 results - no usable content found`);
+            }
+          } else {
+            console.log(`[SEARCH API] OpenAI response has no output array or empty output`);
+          }
+        } else {
+          const errorText = await openaiResponse.text();
+          console.error(`[SEARCH API] OpenAI web search API error: ${openaiResponse.status} ${openaiResponse.statusText} - ${errorText}`);
+        }
+      } catch (openaiError) {
+        console.error('[SEARCH API] OpenAI native search failed:', openaiError);
+      }
+    }
+    
+    // Fallback to Brave Search if OpenAI didn't work
+    if (results.length === 0) {
+      let braveApiKey: string | null = null;
+      
+      if (req.user?.id) {
+        try {
+          braveApiKey = await getUserApiKey(req.user.id, 'brave');
+        } catch (error) {
+          console.log('[SEARCH API] No user Brave API key found');
+        }
+      }
+      
+      // Fallback to environment variable if no user key
+      if (!braveApiKey) {
+        braveApiKey = process.env.BRAVE_SEARCH_API_KEY || null;
+      }
+      
+      if (braveApiKey) {
+        try {
+          console.log('[SEARCH API] Falling back to Brave Search');
+          const braveUrl = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${num_results}`;
+          const braveResponse = await fetch(braveUrl, {
+            headers: {
+              'X-Subscription-Token': braveApiKey,
+              'Accept': 'application/json'
+            },
+            signal: AbortSignal.timeout(8000) // 8 second timeout
+          });
+          
+          if (braveResponse.ok) {
+            const braveData = await braveResponse.json();
+            
+            if (braveData.web && braveData.web.results) {
+              results = braveData.web.results.slice(0, num_results).map((result: any) => ({
+                title: result.title,
+                url: result.url,
+                snippet: result.description,
+                source: new URL(result.url).hostname
+              }));
+              
+              searchMethod = 'brave';
+              console.log(`[SEARCH API] Brave Search returned ${results.length} results`);
+            }
+          } else {
+            console.error(`[SEARCH API] Brave Search API error: ${braveResponse.status} ${braveResponse.statusText}`);
+          }
+        } catch (braveError) {
+          console.error('[SEARCH API] Brave Search failed:', braveError);
+        }
+      }
+    }
+    
+    // Final fallback to DuckDuckGo if both OpenAI and Brave failed
+    if (results.length === 0) {
+      try {
+        console.log('[SEARCH API] Falling back to DuckDuckGo search');
+        // Use DuckDuckGo Instant Answer API (free, no API key needed) with timeout
+        const duckduckgoUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+        const ddgResponse = await fetch(duckduckgoUrl, {
+          signal: AbortSignal.timeout(5000) // 5 second timeout
+        });
+        const ddgData = await ddgResponse.json();
+        
+        // Extract results from DuckDuckGo RelatedTopics
+        if (ddgData.RelatedTopics && ddgData.RelatedTopics.length > 0) {
+          results = ddgData.RelatedTopics
+            .filter((topic: any) => topic.FirstURL && topic.Text)
+            .slice(0, num_results)
+            .map((topic: any) => ({
+              title: topic.Text.split(' - ')[0] || topic.Text.split('.')[0] || topic.Text.substring(0, 100),
+              url: topic.FirstURL,
+              snippet: topic.Text,
+              source: new URL(topic.FirstURL).hostname || 'duckduckgo.com'
+            }));
+        }
+        
+        // If DuckDuckGo doesn't have enough results, try the Abstract field
+        if (results.length === 0 && ddgData.Abstract) {
+          results.push({
+            title: ddgData.Heading || query,
+            url: ddgData.AbstractURL || `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
+            snippet: ddgData.Abstract,
+            source: ddgData.AbstractSource || 'duckduckgo.com'
+          });
+        }
+        
+        // If still no results, try the Answer field
+        if (results.length === 0 && ddgData.Answer) {
+          results.push({
+            title: `Answer for "${query}"`,
+            url: ddgData.AnswerURL || `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
+            snippet: ddgData.Answer,
+            source: ddgData.AnswerType || 'duckduckgo.com'
+          });
+        }
+        
+        searchMethod = 'duckduckgo';
+        console.log(`[SEARCH API] DuckDuckGo returned ${results.length} results`);
+        
+      } catch (ddgError) {
+        console.error('[SEARCH API] DuckDuckGo search failed:', ddgError);
+      }
+    }
+    
+    // If no real results, provide helpful fallback
+    if (results.length === 0) {
+      results = [
+        {
+          title: `Search for "${query}" on DuckDuckGo`,
+          url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
+          snippet: `I wasn't able to find specific results for "${query}" through any search API, but you can search for it directly on DuckDuckGo.`,
+          source: "duckduckgo.com"
+        }
+      ];
+      searchMethod = 'fallback';
+    }
+    
+    console.log('✅ SEARCH RESULTS RETURNED TO AGENT:', {
+      query: query,
+      searchMethod: searchMethod,
+      resultCount: results.length,
+      resultTitles: results.slice(0, 3).map(r => r.title),
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({
+      query,
+      results,
+      search_method: searchMethod,
+      timestamp: new Date().toISOString(),
+      total_results: results.length
+    });
+    
+  } catch (error: any) {
+    console.error('Web search error:', error);
+    res.status(500).json({ 
+      error: 'Failed to perform web search', 
+      details: error.message 
+    });
+  }
+});
+
+// Test Brave Search API endpoint
+router.post("/search/test-brave", requireAuth, async (req: Request, res: Response) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Get user's Brave API key
+    let braveApiKey: string | null = null;
+    
+    try {
+      braveApiKey = await getUserApiKey(req.user.id, 'brave');
+    } catch (error) {
+      return res.status(400).json({ 
+        error: 'No Brave Search API key configured. Please add your API key in settings.' 
+      });
+    }
+
+    if (!braveApiKey) {
+      return res.status(400).json({ 
+        error: 'No Brave Search API key configured. Please add your API key in settings.' 
+      });
+    }
+
+    // Test the API key with a simple search
+    const testQuery = 'weather forecast';
+    const braveUrl = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(testQuery)}&count=1`;
+    
+    const braveResponse = await fetch(braveUrl, {
+      headers: {
+        'X-Subscription-Token': braveApiKey,
+        'Accept': 'application/json'
+      }
+    });
+
+    if (braveResponse.ok) {
+      const braveData = await braveResponse.json();
+      
+      // Check if we got valid results
+      if (braveData.web && braveData.web.results && braveData.web.results.length > 0) {
+        res.json({
+          status: 'working',
+          message: 'Brave Search API key is working correctly',
+          testQuery,
+          resultCount: braveData.web.results.length
+        });
+      } else {
+        res.json({
+          status: 'error',
+          message: 'Brave Search API returned no results',
+          testQuery
+        });
+      }
+    } else {
+      const errorText = await braveResponse.text();
+      res.status(400).json({
+        status: 'error',
+        message: `Brave Search API error: ${braveResponse.status} ${braveResponse.statusText}`,
+        details: errorText
+      });
+    }
+
+  } catch (error: any) {
+    console.error('Brave Search API test error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to test Brave Search API',
+      details: error.message
+    });
+  }
+});
+
 // Calendar API endpoint
 router.get("/calendar", async (req: Request, res: Response) => {
   try {
@@ -688,9 +1272,219 @@ router.post("/assistant", async (req: Request, res: Response) => {
   }
 });
 
-// Session endpoint for realtime
+// Create ephemeral session endpoint for realtime WebRTC
+router.post("/realtime/session", requireAuth, async (req: Request, res: Response) => {
+  console.log('Received request to create ephemeral realtime session');
+  console.log('📨 REQUEST BODY:', req.body);
+  
+  const user = (req as any).user;
+  const { voice = 'alloy', model = 'gpt-4o-realtime-preview-2024-12-17' } = req.body;
+  console.log('📝 EXTRACTED VOICE:', voice, 'FROM REQUEST');
+  
+  // Get user's OpenAI API key from database
+  const apiKey = await getUserApiKey(user.id, 'openai');
+  if (!apiKey) {
+    console.error('User does not have OpenAI API key configured');
+    return res.status(400).json({ 
+      error: 'OpenAI API key is not configured for this user. Please add your API key in settings.' 
+    });
+  }
+  
+  if (isPlaceholderKey(apiKey)) {
+    console.error('User OpenAI API key appears to be a placeholder');
+    return res.status(400).json({ 
+      error: 'OpenAI API key appears to be a placeholder. Please set your actual API key in settings.' 
+    });
+  }
+  
+  try {
+    console.log(`Creating ephemeral realtime session with voice: ${voice}, model: ${model}`);
+    
+    // Get user settings for location context
+    let userSettingsContext = '';
+    let currentWeatherContext = '';
+    try {
+      const settingsRecords = await db
+        .select()
+        .from(userSettings)
+        .where(eq(userSettings.userId, user.id))
+        .limit(1);
+      
+      if (settingsRecords.length > 0) {
+        const settings = settingsRecords[0];
+        console.log('🔍 Retrieved user settings for AI context:', settings);
+        
+        if (settings.location) {
+          const tempUnit = settings.temperatureUnit === 'celsius' ? 'Celsius' : 'Fahrenheit';
+          const unit = settings.temperatureUnit === 'celsius' ? 'C' : 'F';
+          userSettingsContext = `\n\nUser Settings:\n- Current Location: ${settings.location}\n- Temperature Preference: ${tempUnit}`;
+          
+          // Fetch current weather data for context
+          try {
+            const weatherResponse = await fetch(`${process.env.NODE_ENV === 'production' ? 'https://your-domain.com' : 'http://localhost:3001'}/api/weather?location=${encodeURIComponent(settings.location)}&unit=${unit}`, {
+              headers: {
+                'Authorization': req.headers.authorization || ''
+              }
+            });
+            
+            if (weatherResponse.ok) {
+              const weatherData = await weatherResponse.json();
+              currentWeatherContext = `\n\nCurrent Weather at ${weatherData.location}:\n- Temperature: ${weatherData.currentWeather.temperature}${weatherData.currentWeather.unit} (feels like ${weatherData.currentWeather.feelsLike}${weatherData.currentWeather.unit})\n- Conditions: ${weatherData.currentWeather.description}\n- Humidity: ${weatherData.currentWeather.humidity}\n- Wind: ${weatherData.currentWeather.windSpeed}\n\nToday's Forecast:\n${weatherData.forecast.slice(0, 4).map(f => `- ${f.time}: ${f.temperature}°${unit}`).join('\n')}\n\nUpcoming Days:\n${weatherData.dailyForecast.slice(0, 3).map(d => `- ${d.day}: ${d.temperature}°${unit}`).join('\n')}`;
+            }
+          } catch (weatherError) {
+            console.warn('Could not fetch current weather for AI context:', weatherError);
+          }
+        }
+      } else {
+        console.log('🔍 No user settings found in database');
+      }
+    } catch (settingsError) {
+      console.warn('Could not fetch user settings for AI context:', settingsError);
+    }
+    
+    // Get user memories for context
+    let userMemoryContext = '';
+    try {
+      const recentMemories = await db
+        .select()
+        .from(aiMemories)
+        .where(and(
+          eq(aiMemories.userId, user.id),
+          gt(aiMemories.importance, 5)
+        ))
+        .orderBy(desc(aiMemories.importance), desc(aiMemories.createdAt))
+        .limit(8);
+      
+      if (recentMemories.length > 0) {
+        userMemoryContext = '\n\nUser Memory Context:\n' + 
+          recentMemories.map(memory => 
+            `- [${memory.memoryType}] ${memory.content}`
+          ).join('\n');
+      }
+    } catch (memoryError) {
+      console.warn('Could not fetch user memories:', memoryError);
+    }
+    
+    // Log the context being sent to the realtime agent
+    console.log('🤖 CREATING REALTIME SESSION WITH AGENT CONTEXT:', {
+      model: model,
+      voice: voice.toLowerCase(),
+      userLocation: userSettingsContext ? 'included' : 'none',
+      weatherContext: currentWeatherContext ? 'included' : 'none',
+      memoryContext: userMemoryContext ? `${recentMemories?.length || 0} memories` : 'none',
+      availableTools: ['web_search', 'remember_user_info', 'get_weather', 'get_time'],
+      timestamp: new Date().toISOString()
+    });
+    
+    // Create ephemeral session with OpenAI API using user's permanent key
+    const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'OpenAI-Beta': 'realtime'
+      },
+      body: JSON.stringify({
+        model,
+        voice: voice.toLowerCase(),
+        modalities: ['text', 'audio'],
+        instructions: `You are a helpful, friendly AI assistant with memory capabilities. Be concise and clear in your responses. You can help with weather information, web search, calendar events, and general questions. When users ask about current events, news, or information you might not have, use the web search function to get up-to-date information.\n\nImportant: When users share personal information, preferences, interests, goals, or important facts about themselves, use the remember_user_info function to store this information for future conversations. This helps you provide personalized assistance.${userSettingsContext}${currentWeatherContext}${userMemoryContext}`,
+        tools: [
+          {
+            type: 'function',
+            name: 'web_search',
+            description: 'Search the web for current information, news, facts, or any topic',
+            parameters: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: 'The search query' },
+                num_results: { type: 'number', description: 'Number of results (1-5)', minimum: 1, maximum: 5 }
+              },
+              required: ['query']
+            }
+          },
+          {
+            type: 'function',
+            name: 'remember_user_info',
+            description: 'Remember important information about the user for future conversations',
+            parameters: {
+              type: 'object',
+              properties: {
+                memory_type: { 
+                  type: 'string', 
+                  description: 'Type of memory (e.g., "preference", "personal_info", "interest", "goal", "context")',
+                  enum: ['preference', 'personal_info', 'interest', 'goal', 'context', 'important_fact']
+                },
+                content: { type: 'string', description: 'The information to remember about the user' },
+                importance: { type: 'number', description: 'Importance level 1-10', minimum: 1, maximum: 10 }
+              },
+              required: ['memory_type', 'content']
+            }
+          },
+          {
+            type: 'function',
+            name: 'get_weather',
+            description: 'Get current weather conditions and forecast for any location worldwide',
+            parameters: {
+              type: 'object',
+              properties: {
+                location: { 
+                  type: 'string', 
+                  description: 'City name, address, or coordinates (e.g., "New York", "Paris, France", "40.7128,-74.0060")'
+                },
+                include_forecast: { 
+                  type: 'boolean', 
+                  description: 'Include hourly and daily forecast data',
+                  default: false
+                }
+              },
+              required: ['location']
+            }
+          }
+        ],
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.5,
+          silence_duration_ms: 500,
+          prefix_padding_ms: 300,
+          create_response: true,
+          interrupt_response: true
+        }
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`OpenAI API error: ${response.status} - ${errorText}`);
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+    
+    const sessionData = await response.json();
+    console.log('Ephemeral session created successfully:', sessionData.id);
+    
+    // Return the session data with ephemeral token - this is the secure pattern
+    // The client will use the ephemeral token instead of the permanent API key
+    res.json({
+      sessionId: sessionData.id,
+      ephemeralToken: sessionData.client_secret?.value || sessionData.client_secret,
+      sessionDetails: {
+        voice,
+        model,
+        expires_at: sessionData.expires_at
+      }
+    });
+    
+  } catch (error: any) {
+    console.error('Error creating ephemeral realtime session:', error);
+    return res.status(500).json({ 
+      error: error.message || 'Failed to create ephemeral realtime session' 
+    });
+  }
+});
+
+// Legacy session endpoint for backward compatibility
 router.get("/session", requireAuth, async (req: Request, res: Response) => {
-  console.log('Received request to create realtime session');
+  console.log('Received legacy request to create realtime session');
   
   const user = (req as any).user;
   
@@ -739,6 +1533,121 @@ router.get("/session", requireAuth, async (req: Request, res: Response) => {
     console.error('Error creating realtime session:', error);
     return res.status(500).json({ 
       error: error.message || 'Failed to create realtime session' 
+    });
+  }
+});
+
+// Time/date endpoint for agent's get_time function
+router.get("/time", async (req: Request, res: Response) => {
+  try {
+    const now = new Date();
+    const { timezone } = req.query;
+    
+    console.log('⏰ TIME API CALLED BY AGENT:', {
+      requestedTimezone: timezone || 'server default',
+      timestamp: now.toISOString()
+    });
+    
+    let timeData;
+    if (timezone && typeof timezone === 'string') {
+      try {
+        timeData = {
+          current_time: now.toLocaleString('en-US', { timeZone: timezone }),
+          timezone: timezone,
+          utc_time: now.toISOString(),
+          unix_timestamp: Math.floor(now.getTime() / 1000),
+          day_of_week: now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone }),
+          date: now.toLocaleDateString('en-US', { timeZone: timezone })
+        };
+      } catch (timezoneError) {
+        // Fallback to server time if timezone is invalid
+        timeData = {
+          current_time: now.toLocaleString(),
+          timezone: 'server default (invalid timezone provided)',
+          utc_time: now.toISOString(),
+          unix_timestamp: Math.floor(now.getTime() / 1000),
+          day_of_week: now.toLocaleDateString('en-US', { weekday: 'long' }),
+          date: now.toLocaleDateString()
+        };
+      }
+    } else {
+      timeData = {
+        current_time: now.toLocaleString(),
+        timezone: 'server default',
+        utc_time: now.toISOString(),
+        unix_timestamp: Math.floor(now.getTime() / 1000),
+        day_of_week: now.toLocaleDateString('en-US', { weekday: 'long' }),
+        date: now.toLocaleDateString()
+      };
+    }
+    
+    console.log('✅ TIME DATA RETURNED TO AGENT:', {
+      currentTime: timeData.current_time,
+      timezone: timeData.timezone,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json(timeData);
+    
+  } catch (error: any) {
+    console.error('❌ Error getting time:', error);
+    res.status(500).json({ error: 'Failed to get time', details: error.message });
+  }
+});
+
+// Memory storage endpoint for agent's remember_user_info function
+router.post("/memory", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { memory_type, content, importance = 5 } = req.body;
+    const user = (req as any).user;
+    
+    if (!memory_type || !content) {
+      return res.status(400).json({ 
+        error: 'memory_type and content are required'
+      });
+    }
+    
+    console.log('🧠 AGENT MEMORY STORAGE CALLED:', {
+      memoryType: memory_type,
+      content: content.substring(0, 100) + (content.length > 100 ? '...' : ''),
+      importance: importance,
+      userId: user.id,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Store the memory in the database
+    const [newMemory] = await db.insert(aiMemories).values({
+      userId: user.id,
+      memoryType: memory_type,
+      content: content,
+      importance: Math.min(Math.max(importance, 1), 10), // Clamp between 1-10
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }).returning();
+    
+    console.log('✅ MEMORY STORED SUCCESSFULLY:', {
+      memoryId: newMemory.id,
+      memoryType: memory_type,
+      importance: newMemory.importance,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({
+      success: true,
+      message: 'Memory stored successfully',
+      memory: {
+        id: newMemory.id,
+        type: newMemory.memoryType,
+        importance: newMemory.importance,
+        createdAt: newMemory.createdAt
+      }
+    });
+    
+  } catch (error: any) {
+    console.error('❌ Error storing memory:', error);
+    res.status(500).json({ 
+      error: 'Failed to store memory', 
+      details: error.message 
     });
   }
 });

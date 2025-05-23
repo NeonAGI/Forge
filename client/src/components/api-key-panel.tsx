@@ -17,14 +17,16 @@ interface ApiKeyPanelProps {
 }
 
 export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
-  const { apiKeyStatuses, isLoading, error: apiError, updateApiKeys, testApiConnections } = useApiKeys();
+  const { apiKeyStatuses, isLoading, error: apiError, updateApiKeys, testApiConnections, testBraveApiKey } = useApiKeys();
   
   const [activeTab, setActiveTab] = useState('openai');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [weatherApiKey, setWeatherApiKey] = useState('');
+  const [braveApiKey, setBraveApiKey] = useState('');
   const [showKeys, setShowKeys] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isTestingBrave, setIsTestingBrave] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(apiError);
 
@@ -48,6 +50,12 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
     return key.length >= 16;
   };
 
+  // Validate Brave Search API key format
+  const isValidBraveKey = (key: string) => {
+    // Brave Search API keys are typically 32+ characters
+    return key.length >= 20;
+  };
+
   const handleTestConnections = async () => {
     setIsTesting(true);
     setError(null);
@@ -69,7 +77,33 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
     }
   };
 
-  const handleSubmit = async (type: 'openai' | 'weather' | 'both') => {
+  const handleTestBraveApi = async () => {
+    setIsTestingBrave(true);
+    setError(null);
+    setSuccess(null);
+    
+    try {
+      const result = await testBraveApiKey();
+      if (result.status === 'working') {
+        setSuccess('Brave Search API key is working correctly');
+      } else {
+        setError(result.message || 'Brave Search API test failed');
+      }
+      
+      // Clear messages after 3 seconds
+      setTimeout(() => {
+        setSuccess(null);
+        setError(null);
+      }, 3000);
+    } catch (err: any) {
+      console.error('Error testing Brave API key:', err);
+      setError(err.message || 'Failed to test Brave Search API key');
+    } finally {
+      setIsTestingBrave(false);
+    }
+  };
+
+  const handleSubmit = async (type: 'openai' | 'weather' | 'brave' | 'both') => {
     setIsSubmitting(true);
     setError(null);
     setSuccess(null);
@@ -87,8 +121,12 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
         throw new Error('Invalid Weather API key format');
       }
 
+      if ((type === 'brave' || type === 'both') && braveApiKey && !isValidBraveKey(braveApiKey)) {
+        throw new Error('Invalid Brave Search API key format. Keys must be at least 20 characters long.');
+      }
+
       // Prepare data to send based on which keys are being updated
-      const keysToUpdate: { openaiApiKey?: string; weatherApiKey?: string } = {};
+      const keysToUpdate: { openaiApiKey?: string; weatherApiKey?: string; braveApiKey?: string } = {};
       
       if (type === 'openai' || type === 'both') {
         keysToUpdate.openaiApiKey = openaiApiKey;
@@ -96,6 +134,10 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
       
       if (type === 'weather' || type === 'both') {
         keysToUpdate.weatherApiKey = weatherApiKey;
+      }
+      
+      if (type === 'brave' || type === 'both') {
+        keysToUpdate.braveApiKey = braveApiKey;
       }
 
       // If we're not updating any keys, don't proceed
@@ -110,6 +152,7 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
       // Clear inputs for security
       setOpenaiApiKey('');
       setWeatherApiKey('');
+      setBraveApiKey('');
       setShowKeys(false);
       
       // Show success message
@@ -169,9 +212,10 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
       ) : (
         <>
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid grid-cols-2 mb-6">
+            <TabsList className="grid grid-cols-3 mb-6">
               <TabsTrigger value="openai">OpenAI API</TabsTrigger>
               <TabsTrigger value="weather">Weather API</TabsTrigger>
+              <TabsTrigger value="brave">Brave Search</TabsTrigger>
             </TabsList>
             
             <TabsContent value="openai" className="space-y-4">
@@ -315,6 +359,102 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
                 </Button>
               </div>
             </TabsContent>
+            
+            <TabsContent value="brave" className="space-y-4">
+              <div className="space-y-2">
+                <h3 className="text-lg font-medium">Brave Search API Key</h3>
+                <p className="text-sm text-muted-foreground mb-2">
+                  This key is used for enhanced web search capabilities in the AI assistant.
+                </p>
+                
+                {apiKeyStatuses?.braveApiKey?.isSet && (
+                  <div className="flex items-center p-2 bg-green-500/10 text-green-500 border border-green-300/20 rounded-md mb-4">
+                    {renderStatusIndicator(apiKeyStatuses.braveApiKey.status)}
+                    <span className="text-sm">
+                      Brave Search API key is set. Preview: {apiKeyStatuses.braveApiKey.preview}
+                    </span>
+                  </div>
+                )}
+                
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="brave-key" className="text-sm font-medium">
+                      {apiKeyStatuses?.braveApiKey?.isSet ? 'Enter New Key' : 'Enter Key'}
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs text-muted-foreground">Show Input</span>
+                      <Switch
+                        checked={showKeys}
+                        onCheckedChange={setShowKeys}
+                        aria-label="Toggle key visibility"
+                      />
+                      {showKeys ? <EyeIcon className="h-3.5 w-3.5 ml-1 text-muted-foreground" /> : <EyeOffIcon className="h-3.5 w-3.5 ml-1 text-muted-foreground" />}
+                    </div>
+                  </div>
+                  
+                  <Input
+                    id="brave-key"
+                    placeholder="Your Brave Search API key"
+                    type={showKeys ? 'text' : 'password'}
+                    value={braveApiKey}
+                    onChange={(e) => setBraveApiKey(e.target.value)}
+                    className="w-full"
+                  />
+                  
+                  {apiKeyStatuses?.braveApiKey?.isSet && (
+                    <p className="text-xs text-amber-500/90 mt-1">
+                      <AlertTriangle className="inline-block h-3 w-3 mr-1" />
+                      For security reasons, existing keys cannot be viewed. Enter a new key to replace the current one.
+                    </p>
+                  )}
+                  
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Get your API key from the <a href="https://api.search.brave.com/app/keys" className="text-accent hover:underline" target="_blank" rel="noopener noreferrer">Brave Search API dashboard</a>
+                  </p>
+                  
+                  <p className="text-xs text-blue-500/90 mt-1">
+                    <span className="font-medium">Optional:</span> If not provided, DuckDuckGo will be used for web search.
+                  </p>
+                </div>
+                
+                <Button 
+                  onClick={() => handleSubmit('brave')}
+                  disabled={isSubmitting || !braveApiKey}
+                  className="w-full mt-4"
+                  variant="default"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader className="animate-spin mr-2 h-4 w-4" />
+                      Saving...
+                    </>
+                  ) : (
+                    apiKeyStatuses?.braveApiKey?.isSet ? 'Update Brave Search API Key' : 'Save Brave Search API Key'
+                  )}
+                </Button>
+                
+                {apiKeyStatuses?.braveApiKey?.isSet && (
+                  <Button 
+                    onClick={handleTestBraveApi}
+                    disabled={isTestingBrave}
+                    className="w-full mt-2"
+                    variant="outline"
+                  >
+                    {isTestingBrave ? (
+                      <>
+                        <Loader className="animate-spin mr-2 h-4 w-4" />
+                        Testing...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4 mr-2" />
+                        Test Brave Search API
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            </TabsContent>
           </Tabs>
           
           {/* Action buttons for all tabs */}
@@ -322,7 +462,7 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
             {/* Test connection button */}
             <Button
               onClick={handleTestConnections}
-              disabled={isTesting || (!apiKeyStatuses?.openaiApiKey.isSet && !apiKeyStatuses?.weatherApiKey.isSet)}
+              disabled={isTesting || (!apiKeyStatuses?.openaiApiKey.isSet && !apiKeyStatuses?.weatherApiKey.isSet && !apiKeyStatuses?.braveApiKey?.isSet)}
               className="w-full mb-4"
               variant="outline"
             >
@@ -339,10 +479,10 @@ export function ApiKeyPanel({ onClose }: ApiKeyPanelProps) {
               )}
             </Button>
 
-            {(openaiApiKey || weatherApiKey) && (
+            {(openaiApiKey || weatherApiKey || braveApiKey) && (
               <Button 
                 onClick={() => handleSubmit('both')}
-                disabled={isSubmitting || (!openaiApiKey && !weatherApiKey)}
+                disabled={isSubmitting || (!openaiApiKey && !weatherApiKey && !braveApiKey)}
                 className="w-full mb-4"
                 variant="default"
               >

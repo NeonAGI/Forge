@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Link } from "wouter";
+import { ConversationTranscript } from "@/components/conversation-transcript";
 
 function capitalizeFirstLetter(string: string) {
   return string.charAt(0).toUpperCase() + string.slice(1);
@@ -23,10 +24,15 @@ export const RealtimeWidget: React.FC = () => {
     isConnecting,
     connectionError,
     assistantMode,
+    currentTool,
+    lastToolExecution,
     updateWakePhrase,
     startWakePhraseDetection,
     stopWakePhraseDetection,
-    sendTextMessage
+    sendTextMessage,
+    conversationTranscripts,
+    currentUserTranscript,
+    clearTranscripts
   } = useOpenAIRealtimeV2();
   
   const [wakePhrase, setWakePhrase] = React.useState(sessionInfo.wakePhrase);
@@ -70,6 +76,7 @@ export const RealtimeWidget: React.FC = () => {
   const statusColor = getStatusColor(connectionStatus);
 
   return (
+    <>
     <GlassCard 
       className="col-span-1 xl:col-span-2 glass-glow-cyan overflow-hidden"
       animationDelay={0.4}
@@ -303,6 +310,74 @@ export const RealtimeWidget: React.FC = () => {
               {assistantMode.charAt(0).toUpperCase() + assistantMode.slice(1)}
             </Badge>
           </div>
+          {currentTool && (
+            <div className="p-3 rounded-lg bg-purple-500/10 border border-purple-500/30">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-text-muted text-sm">🔧 Agent Tool Active</span>
+                <Badge 
+                  variant="outline" 
+                  className="bg-purple-500/20 border-purple-500/30 text-purple-500 animate-pulse"
+                >
+                  EXECUTING
+                </Badge>
+              </div>
+              <div className="text-purple-400 font-medium">
+                {currentTool === 'web_search' ? '🔍 Searching the web for current information...' :
+                 currentTool === 'get_weather' ? '🌤️ Fetching weather data from API...' :
+                 currentTool === 'get_time' ? '🕐 Getting current time information...' :
+                 currentTool === 'remember_user_info' ? '🧠 Saving information to memory...' :
+                 `🔧 Executing ${currentTool}...`}
+              </div>
+              <div className="text-xs text-purple-300 mt-1 opacity-75">
+                The AI assistant is actively using tools to provide you with accurate, up-to-date information.
+              </div>
+            </div>
+          )}
+          
+          {/* Last Tool Execution Details */}
+          {lastToolExecution && (
+            <div className="mt-3 p-3 rounded-lg bg-cyan-500/10 border border-cyan-500/30">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-text-muted text-sm">📊 Last Tool Execution</span>
+                <span className="text-xs text-cyan-400 font-mono">{lastToolExecution.timestamp}</span>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center">
+                  <span className="text-cyan-400 font-medium mr-2">
+                    {lastToolExecution.tool === 'web_search' ? '🔍 Web Search' :
+                     lastToolExecution.tool === 'get_weather' ? '🌤️ Weather Lookup' :
+                     lastToolExecution.tool === 'get_time' ? '🕐 Time Query' :
+                     lastToolExecution.tool === 'remember_user_info' ? '🧠 Memory Save' :
+                     `🔧 ${lastToolExecution.tool}`}
+                  </span>
+                </div>
+                
+                {/* Show tool arguments */}
+                <div className="text-xs">
+                  <span className="text-text-muted">Input: </span>
+                  <span className="text-cyan-300">
+                    {lastToolExecution.tool === 'web_search' && lastToolExecution.args?.query && `"${lastToolExecution.args.query}"`}
+                    {lastToolExecution.tool === 'get_weather' && lastToolExecution.args?.location && `Location: ${lastToolExecution.args.location}`}
+                    {lastToolExecution.tool === 'get_time' && lastToolExecution.args?.timezone && `Timezone: ${lastToolExecution.args.timezone}`}
+                    {lastToolExecution.tool === 'remember_user_info' && lastToolExecution.args?.content && `${lastToolExecution.args.memory_type}: ${lastToolExecution.args.content.substring(0, 50)}...`}
+                  </span>
+                </div>
+                
+                {/* Show tool results if available */}
+                {lastToolExecution.result && (
+                  <div className="text-xs">
+                    <span className="text-text-muted">Result: </span>
+                    <span className="text-green-400">
+                      {lastToolExecution.tool === 'web_search' && lastToolExecution.result?.results?.length && `Found ${lastToolExecution.result.results.length} results`}
+                      {lastToolExecution.tool === 'get_weather' && lastToolExecution.result?.temperature && `${lastToolExecution.result.temperature} - ${lastToolExecution.result.condition}`}
+                      {lastToolExecution.tool === 'get_time' && lastToolExecution.result?.current_time && `${lastToolExecution.result.current_time}`}
+                      {lastToolExecution.tool === 'remember_user_info' && lastToolExecution.result?.status && `${lastToolExecution.result.status} (ID: ${lastToolExecution.result.memory_id})`}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         
         {/* Event log with animated indicators */}
@@ -313,20 +388,61 @@ export const RealtimeWidget: React.FC = () => {
               Recent API Activity
             </div>
             <div className="text-xs space-y-2.5 max-h-48 overflow-y-auto">
-              {recentEvents.map((event, index) => (
-                <div key={index} className="flex items-center group transition-all hover:bg-primary/40 px-2 py-1 rounded-md">
-                  <div className="h-5 w-5 mr-2 flex items-center justify-center relative">
-                    <div className="absolute inset-0 rounded-full bg-green-500/10 group-hover:bg-green-500/20 transition-colors"></div>
-                    <CheckCircle2 className="h-3 w-3 text-green-500" />
+              {recentEvents.map((event, index) => {
+                // Enhanced event display with icons and descriptions
+                const getEventDetails = (eventName: string) => {
+                  if (eventName.includes('tool_call_web_search')) {
+                    return { icon: '🔍', color: 'text-blue-500', bg: 'bg-blue-500/10', label: 'Web Search Tool Called' };
+                  } else if (eventName.includes('tool_call_get_weather')) {
+                    return { icon: '🌤️', color: 'text-orange-500', bg: 'bg-orange-500/10', label: 'Weather Tool Called' };
+                  } else if (eventName.includes('tool_call_get_time')) {
+                    return { icon: '🕐', color: 'text-purple-500', bg: 'bg-purple-500/10', label: 'Time Tool Called' };
+                  } else if (eventName.includes('tool_call_remember_user_info')) {
+                    return { icon: '🧠', color: 'text-pink-500', bg: 'bg-pink-500/10', label: 'Memory Tool Called' };
+                  } else if (eventName.includes('tool_call_completed')) {
+                    return { icon: '✅', color: 'text-green-500', bg: 'bg-green-500/10', label: 'Tool Execution Completed' };
+                  } else if (eventName.includes('function_result_sent')) {
+                    return { icon: '📤', color: 'text-cyan-500', bg: 'bg-cyan-500/10', label: 'Tool Results Sent to AI' };
+                  } else if (eventName.includes('speech_started')) {
+                    return { icon: '🎤', color: 'text-blue-500', bg: 'bg-blue-500/10', label: 'User Voice Input Started' };
+                  } else if (eventName.includes('speech_stopped')) {
+                    return { icon: '⏸️', color: 'text-yellow-500', bg: 'bg-yellow-500/10', label: 'User Voice Input Stopped' };
+                  } else if (eventName.includes('audio_response')) {
+                    return { icon: '🔊', color: 'text-green-500', bg: 'bg-green-500/10', label: 'AI Voice Response' };
+                  } else {
+                    return { icon: '●', color: 'text-gray-500', bg: 'bg-gray-500/10', label: event.name };
+                  }
+                };
+                
+                const eventDetails = getEventDetails(event.name);
+                
+                return (
+                  <div key={index} className={`flex items-center group transition-all hover:bg-primary/40 px-2 py-1 rounded-md ${eventDetails.bg}`}>
+                    <div className="h-5 w-5 mr-2 flex items-center justify-center relative">
+                      <span className={`${eventDetails.color} text-sm`}>{eventDetails.icon}</span>
+                    </div>
+                    <span className={`${eventDetails.color} group-hover:text-text transition-colors flex-1`}>
+                      {eventDetails.label}
+                    </span>
+                    <span className="ml-auto text-accent-alt/70 font-mono text-xs">({event.time})</span>
                   </div>
-                  <span className="text-text-muted group-hover:text-text transition-colors">{event.name}</span>
-                  <span className="ml-auto text-accent-alt/70 font-mono text-xs">({event.time})</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
       </div>
     </GlassCard>
+    
+    {/* Conversation Transcript */}
+    {connectionStatus === 'connected' && (
+      <ConversationTranscript
+        transcripts={conversationTranscripts}
+        currentUserTranscript={currentUserTranscript}
+        onClear={clearTranscripts}
+        className="mt-4"
+      />
+    )}
+    </>
   );
 };

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Link } from 'wouter';
+import { EventsDisplay } from '@/components/events-display';
 
 const Diagnosis = () => {
   useEffect(() => {
@@ -48,6 +49,10 @@ const Diagnosis = () => {
           <h3 className="text-xl font-medium">Depth Card</h3>
           <p>Should have depth effect</p>
         </div>
+      </div>
+      
+      <div className="w-full max-w-6xl">
+        <EventsDisplay />
       </div>
       
       <div className="text-center mt-8">

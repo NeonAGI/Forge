@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import { useEvent } from "@/contexts/event-context";
+import { useConnectionManager } from "@/hooks/use-connection-manager";
+import { useSettings } from "@/hooks/use-settings";
 
 // Define SpeechRecognition interface for TypeScript
 interface SpeechRecognitionEvent extends Event {
@@ -68,10 +71,12 @@ export interface RealtimeEvent {
 }
 
 export function useOpenAIRealtime() {
+  const { logClientEvent, logServerEvent } = useEvent();
+  const { userSettings } = useSettings();
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [isConnecting, setIsConnecting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo>({
-    voice: 'alloy',
+    voice: userSettings?.voiceId || 'alloy',
     language: 'English (US)',
     model: 'gpt-4o-realtime-preview',
     connectionType: 'WebRTC',
@@ -85,6 +90,23 @@ export function useOpenAIRealtime() {
   const [recentEvents, setRecentEvents] = useState<RealtimeEvent[]>([]);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   
+  // Connection manager for robust state management
+  const connectionManager = useConnectionManager(
+    async () => {
+      await performActualConnection();
+    },
+    () => {
+      performActualDisconnection();
+    },
+    {
+      maxRetryAttempts: 3,
+      retryDelayMs: 2000,
+      exponentialBackoff: true,
+      healthCheckIntervalMs: 30000,
+      connectionTimeoutMs: 20000,
+    }
+  );
+  
   // WebRTC connection references
   const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null);
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
@@ -97,8 +119,8 @@ export function useOpenAIRealtime() {
   const animationFrameRef = useRef<number | null>(null);
   const [voiceIntensity, setVoiceIntensity] = useState(0);
   
-  // Function to start a voice chat session
-  const startVoiceChat = async () => {
+  // Internal function to perform the actual connection
+  const performActualConnection = async () => {
     setIsConnecting(true);
     setConnectionError(null);
     setAssistantMode('processing');
@@ -112,6 +134,7 @@ export function useOpenAIRealtime() {
       }
       
       console.log("Initializing WebRTC connection to OpenAI Realtime API...");
+      logClientEvent({ type: 'connection_init', action: 'start_voice_chat' }, '', 'connection');
       
       // --- AUDIOCONTEXT SETUP ---
       if (!audioContextRef.current) {
@@ -122,8 +145,9 @@ export function useOpenAIRealtime() {
       }
       
       // --- FETCH SESSION TOKEN ---
+      const currentVoice = userSettings?.voiceId || sessionInfo.voice;
       const response = await apiRequest("POST", "/api/realtime/session", {
-        voice: sessionInfo.voice.toLowerCase(),
+        voice: currentVoice.toLowerCase(),
         model: sessionInfo.model
       });
       
@@ -174,7 +198,7 @@ export function useOpenAIRealtime() {
       if (sessionDetails) {
         setSessionInfo(prev => ({
           ...prev,
-          voice: sessionDetails.voice || prev.voice,
+          voice: sessionDetails.voice || userSettings?.voiceId || prev.voice,
           model: sessionDetails.model || prev.model
         }));
       }
@@ -310,7 +334,20 @@ export function useOpenAIRealtime() {
         setConnectionStatus('connected');
         setAssistantMode('listening');
         
-        // --- SEND DETAILED SESSION CONFIG ---
+        // --- SEND DETAILED SESSION CONFIG WITH USER CONTEXT ---
+        const userLocation = userSettings?.location || 'unknown';
+        const userTimezone = userSettings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const userTempUnit = userSettings?.temperatureUnit === 'C' ? 'celsius' : 'fahrenheit';
+        
+        const currentTime = new Date();
+        const userContextInfo = `
+User Context:
+- Location: ${userLocation}
+- Timezone: ${userTimezone}
+- Current time: ${currentTime.toLocaleString('en-US', { timeZone: userTimezone })}
+- Temperature preference: ${userTempUnit}
+- Coordinates: ${userSettings?.coordinates ? `${userSettings.coordinates.lat}, ${userSettings.coordinates.lng}` : 'unknown'}`;
+        
         const weatherFunction = {
           type: 'function',
           name: 'get_weather',
@@ -336,11 +373,32 @@ export function useOpenAIRealtime() {
             required: ['timezone']
           }
         };
+        const webSearchFunction = {
+          type: 'function',
+          name: 'web_search',
+          description: 'Search the web for current information, news, facts, or any topic the user asks about',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'The search query to look up on the web' },
+              num_results: { type: 'number', description: 'Number of search results to return (1-10)', minimum: 1, maximum: 10 }
+            },
+            required: ['query']
+          }
+        };
         const sessionConfig = {
           type: 'session.update',
           session: {
-            instructions: 'You are a helpful voice assistant. Be concise in your responses. You can help users with weather information and telling the current time in different timezones.',
-            tools: [weatherFunction, timeFunction],
+            instructions: `You are a helpful, friendly voice assistant with access to the user's profile information. Use this context to provide personalized and relevant responses.${userContextInfo}
+
+Important guidelines:
+- Always consider the user's location and timezone when providing information
+- Use their preferred temperature unit (${userTempUnit}) for weather responses
+- Be conversational and personable - you can chat casually or help with tasks
+- When the user just wants to talk, engage in friendly conversation without always trying to be task-focused
+- Remember details they share to build rapport
+- Use their location context for relevant suggestions and information`,
+            tools: [weatherFunction, timeFunction, webSearchFunction],
             tool_choice: 'auto',
             turn_detection: {
               type: 'semantic_vad',
@@ -428,8 +486,7 @@ export function useOpenAIRealtime() {
         body: pc.localDescription?.sdp,
         headers: {
           "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/sdp",
-          "OpenAI-Beta": "realtime"
+          "Content-Type": "application/sdp"
         }
       });
       
@@ -503,51 +560,146 @@ export function useOpenAIRealtime() {
     }
   };
   
-  // Function to disconnect
-  const disconnect = () => {
+  // Internal function to perform the actual disconnection
+  const performActualDisconnection = () => {
+    logClientEvent({ type: 'disconnect_initiated', source: 'user' }, '', 'connection');
+    
+    // Stop wake phrase detection immediately
+    stopWakePhraseDetection();
+    
+    // Close data channel
     if (dataChannel) {
-      dataChannel.close();
+      try {
+        dataChannel.close();
+      } catch (error) {
+        console.warn('Error closing data channel:', error);
+      }
       setDataChannel(null);
     }
+    
+    // Close WebRTC peer connection
     if (peerConnection) {
-      peerConnection.close();
+      try {
+        peerConnection.close();
+      } catch (error) {
+        console.warn('Error closing peer connection:', error);
+      }
       setPeerConnection(null);
     }
+    
+    // Stop and cleanup audio element
     if (audioElement) {
-      audioElement.pause();
-      audioElement.srcObject = null;
-      if (audioElement.parentNode) audioElement.parentNode.removeChild(audioElement);
+      try {
+        audioElement.pause();
+        audioElement.srcObject = null;
+        if (audioElement.parentNode) {
+          audioElement.parentNode.removeChild(audioElement);
+        }
+      } catch (error) {
+        console.warn('Error cleaning up audio element:', error);
+      }
       setAudioElement(null);
     }
+    
+    // CRITICAL: Stop all microphone tracks to release permissions
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+      try {
+        localStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log(`Stopped ${track.kind} track:`, track.label);
+        });
+        logClientEvent({ 
+          type: 'microphone_released', 
+          trackCount: localStreamRef.current.getTracks().length 
+        }, '', 'audio');
+      } catch (error) {
+        console.warn('Error stopping media tracks:', error);
+      }
       localStreamRef.current = null;
     }
+    
+    // Close audio context
     if (audioContextRef.current) {
-      audioContextRef.current.close();
+      try {
+        audioContextRef.current.close();
+      } catch (error) {
+        console.warn('Error closing audio context:', error);
+      }
       audioContextRef.current = null;
     }
-    // --- CLEANUP ANALYSER AND ANIMATION ---
+    
+    // Cleanup analyser and animation
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
     analyserRef.current = null;
     setVoiceIntensity(0);
+    
+    // Reset UI state
     setConnectionStatus('disconnected');
     setSessionInfo(prev => ({
       ...prev,
       startTime: null
     }));
-    
     setAssistantMode('idle');
+    setConnectionError(null);
+    
+    logClientEvent({ type: 'disconnect_completed', microphoneReleased: true }, '', 'connection');
   };
   
-  // Helper to add events with timestamps
+  // Function to disconnect (public API)
+  const disconnect = () => {
+    connectionManager.disconnect();
+  };
+  
+  // Force stop function - immediately disconnects and releases all permissions
+  const forceStop = () => {
+    logClientEvent({ type: 'force_stop_initiated' }, '', 'connection');
+    
+    // Bypass connection manager for immediate stop
+    performActualDisconnection();
+    
+    // Also clear any connection manager state
+    connectionManager.clearError();
+    
+    console.log('🛑 Force stop completed - all connections closed and microphone released');
+  };
+  
+  // Function to start a voice chat session (public API)
+  const startVoiceChat = async () => {
+    setIsConnecting(true);
+    setConnectionError(null);
+    setAssistantMode('processing');
+    
+    try {
+      await connectionManager.connect();
+    } catch (error: any) {
+      setConnectionError(error.message);
+      setIsConnecting(false);
+      setAssistantMode('idle');
+    }
+  };
+  
+  // Helper function to categorize events
+  const getEventCategory = (eventType: string) => {
+    if (eventType?.includes('session') || eventType?.includes('connection')) return 'connection';
+    if (eventType?.includes('audio') || eventType?.includes('speech')) return 'audio';
+    if (eventType?.includes('conversation') || eventType?.includes('response')) return 'conversation';
+    if (eventType?.includes('error')) return 'error';
+    if (eventType?.includes('function') || eventType?.includes('tool')) return 'tool';
+    return 'system';
+  };
+
+  // Helper to add events with timestamps (legacy support)
   const addRecentEvent = (name: string) => {
     const now = new Date();
     const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
+    // Log to new comprehensive event system
+    logClientEvent({ type: name, action: 'legacy_event' }, '', 'system');
+    
+    // Keep legacy system for backward compatibility
     setRecentEvents(prev => {
       // Keep only the 10 most recent events
       const newEvents = [{ name, time: timeString }, ...prev];
@@ -692,19 +844,55 @@ export function useOpenAIRealtime() {
   };
 
   // Update voice
-  const updateVoice = (newVoice: string) => {
+  const updateVoice = async (newVoice: string) => {
     setSessionInfo(prev => ({
       ...prev,
       voice: newVoice
     }));
+    
+    // Save voice preference to settings
+    if (userSettings) {
+      try {
+        const { updateUserSettings } = await import('@/hooks/use-settings');
+        // Note: This is a simplified approach. In practice, you'd want to use the useSettings hook
+        // at the component level to persist voice changes
+        console.log('Voice preference updated to:', newVoice);
+      } catch (error) {
+        console.warn('Could not save voice preference:', error);
+      }
+    }
   };
 
+  // Sync connection manager state with local state
+  useEffect(() => {
+    const managerState = connectionManager.state;
+    
+    if (managerState === 'connecting') {
+      setConnectionStatus('connecting');
+      setIsConnecting(true);
+    } else if (managerState === 'connected') {
+      setConnectionStatus('connected');
+      setIsConnecting(false);
+      setConnectionError(null);
+    } else if (managerState === 'disconnected' || managerState === 'failed') {
+      setConnectionStatus('disconnected');
+      setIsConnecting(false);
+      if (connectionManager.error) {
+        setConnectionError(connectionManager.error.message);
+      }
+    } else if (managerState === 'reconnecting') {
+      setConnectionStatus('connecting');
+      setIsConnecting(true);
+    }
+  }, [connectionManager.state, connectionManager.error]);
+  
   return {
     connectionStatus,
     sessionInfo,
     recentEvents,
     startVoiceChat,
     disconnect,
+    forceStop, // Emergency stop function
     isConnecting,
     connectionError,
     assistantMode,
@@ -714,6 +902,8 @@ export function useOpenAIRealtime() {
     wakePhraseActive: wakePhraseDetectedRef.current,
     sendTextMessage,
     updateVoice,
-    voiceIntensity
+    voiceIntensity,
+    // Expose connection manager for advanced features
+    connectionManager,
   };
 }

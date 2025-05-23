@@ -31,11 +31,12 @@ export const userApiKeys = pgTable("user_api_keys", {
 export const userSettings = pgTable("user_settings", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id).notNull(),
-  location: text("location").default("San Francisco, CA"),
+  location: text("location").default(""),
   temperatureUnit: text("temperature_unit").default("fahrenheit"),
   timeFormat: text("time_format").default("12h"),
   theme: text("theme").default("auto"),
   voiceEnabled: boolean("voice_enabled").default(true),
+  voiceId: text("voice_id").default("alloy"), // OpenAI voice selection
   backgroundType: text("background_type").default("ai_generated"),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

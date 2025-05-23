@@ -10,11 +10,13 @@ interface ApiKeyStatus {
 interface ApiKeyStatuses {
   openaiApiKey: ApiKeyStatus;
   weatherApiKey: ApiKeyStatus;
+  braveApiKey?: ApiKeyStatus;
 }
 
 interface UpdateApiKeysParams {
   openaiApiKey?: string;
   weatherApiKey?: string;
+  braveApiKey?: string;
 }
 
 interface UseApiKeysReturn {
@@ -23,6 +25,7 @@ interface UseApiKeysReturn {
   error: string | null;
   updateApiKeys: (params: UpdateApiKeysParams) => Promise<ApiKeyStatuses>;
   testApiConnections: () => Promise<any>;
+  testBraveApiKey: () => Promise<any>;
   fetchApiKeyStatuses: () => Promise<void>;
 }
 
@@ -60,6 +63,11 @@ export function useApiKeys(): UseApiKeysReturn {
         weatherApiKey: {
           isSet: data.apiKeys.some((key: any) => key.provider === 'weather' && key.isActive),
           preview: data.apiKeys.find((key: any) => key.provider === 'weather')?.keyName || 'Weather Key',
+          status: 'unknown' as const
+        },
+        braveApiKey: {
+          isSet: data.apiKeys.some((key: any) => key.provider === 'brave' && key.isActive),
+          preview: data.apiKeys.find((key: any) => key.provider === 'brave')?.keyName || 'Brave Search Key',
           status: 'unknown' as const
         }
       };
@@ -110,6 +118,19 @@ export function useApiKeys(): UseApiKeysReturn {
         }
       }
       
+      if (params.braveApiKey) {
+        const braveResponse = await apiRequest('POST', '/api/auth/api-keys', {
+          provider: 'brave',
+          apiKey: params.braveApiKey,
+          keyName: 'Brave Search API Key'
+        });
+        
+        if (!braveResponse.ok) {
+          const errorText = await braveResponse.text();
+          throw new Error(`Failed to update Brave Search API key: ${errorText}`);
+        }
+      }
+      
       // Refresh the statuses after updating
       await fetchApiKeyStatuses();
       
@@ -136,12 +157,32 @@ export function useApiKeys(): UseApiKeysReturn {
     }
   };
 
+  const testBraveApiKey = async () => {
+    setError(null);
+
+    try {
+      const response = await apiRequest('POST', '/api/search/test-brave');
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to test Brave Search API: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      return data;
+    } catch (err: any) {
+      console.error('Error testing Brave API key:', err);
+      throw err;
+    }
+  };
+
   return {
     apiKeyStatuses,
     isLoading,
     error,
     updateApiKeys,
     testApiConnections,
+    testBraveApiKey,
     fetchApiKeyStatuses,
   };
 } 

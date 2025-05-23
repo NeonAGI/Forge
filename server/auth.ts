@@ -164,10 +164,11 @@ export const registerUser = async (userData: {
   // Create default user settings
   await db.insert(userSettings).values({
     userId: user.id,
-    location: 'San Francisco, CA',
+    location: '',
     temperatureUnit: 'fahrenheit',
     timeFormat: '12h',
     theme: 'auto',
+    voiceId: 'alloy',
   });
 
   return user;

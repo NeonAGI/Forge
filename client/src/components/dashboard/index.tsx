@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Clock } from "./clock-widget";
 import { UnifiedWeatherWidget } from "./unified-weather-widget";
 import { WorldMap } from "./world-map";
-import { Settings, Search, RefreshCw, AlertTriangle, MapPin, Save, X, LifeBuoy, User, LogOut } from "lucide-react";
+import { Settings, Search, RefreshCw, AlertTriangle, MapPin, Save, X, LifeBuoy, User, LogOut, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useWeather } from "@/hooks/use-weather";
@@ -12,6 +12,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { SettingsPanel } from "@/components/settings-panel";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,6 +44,7 @@ export const Dashboard: React.FC = () => {
   } = useWeatherBackground();
   const { user, logout } = useAuth();
   const { userSettings } = useSettings();
+  const isMobile = useIsMobile();
   
   const [backgroundStyle, setBackgroundStyle] = useState({
     backgroundColor: '#0f172a', // Dark blue fallback
@@ -80,7 +82,7 @@ export const Dashboard: React.FC = () => {
       const weatherCondition = getWeatherCondition(currentWeather.weatherCode);
       
       // Always use user's settings location for background generation, never the weather API response location
-      const userLocation = userSettings?.location || 'Fort Smith, AR'; // Fallback to user's preferred location
+      const userLocation = userSettings?.location || location; // Fallback to weather API location if no user setting
       console.log(`Force generating background with: user_location=${userLocation}, api_location=${location}, weather=${weatherCondition}, time=${timeOfDay}`);
       
       try {
@@ -121,7 +123,7 @@ export const Dashboard: React.FC = () => {
       const weatherCondition = getWeatherCondition(currentWeather.weatherCode);
       
       // Always use user's settings location for background generation, never the weather API response location
-      const userLocation = userSettings?.location || 'Fort Smith, AR'; // Fallback to user's preferred location
+      const userLocation = userSettings?.location || location; // Fallback to weather API location if no user setting
       console.log(`Loading background with: user_location=${userLocation}, api_location=${location}, weather=${weatherCondition}, time=${timeOfDay}`);
       
       try {
@@ -327,22 +329,22 @@ export const Dashboard: React.FC = () => {
       <div className="absolute inset-0 bg-black/30"></div>
       
       {/* Content overlay */}
-      <div className="relative z-10 container mx-auto px-6 py-6 flex flex-col h-screen">
+      <div className="relative z-10 container mx-auto px-4 sm:px-6 py-4 sm:py-6 flex flex-col h-screen">
         {/* Header with location, time and controls */}
-        <header className="flex justify-between items-center">
+        <header className="flex justify-between items-center mb-4 sm:mb-0">
           <div className="flex flex-col">
-            <div className="text-sm text-white/80 flex items-center">
-              <span>{location || "Brooklyn, New York, USA"}</span>
-              <span className="mx-2">•</span>
+            <div className="text-xs sm:text-sm text-white/80 flex items-center flex-wrap">
+              <span className="truncate max-w-[120px] sm:max-w-none">{location || "Brooklyn, New York, USA"}</span>
+              <span className="mx-1 sm:mx-2">•</span>
               <Clock />
             </div>
           </div>
           
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-1 sm:space-x-3">
             {/* Add refresh background button with dynamic theming */}
             <Button 
               variant="ghost" 
-              size="icon" 
+              size={isMobile ? "sm" : "icon"}
               className="text-white/80 hover:text-white rounded-full"
               style={{
                 backgroundColor: colorPalette ? colorPalette.primaryRgba(0.1) : 'rgba(255, 255, 255, 0.1)',
@@ -351,7 +353,7 @@ export const Dashboard: React.FC = () => {
               onClick={handleForceRefreshBackground}
               disabled={isGenerating || isLoading}
             >
-              <RefreshCw className={`h-5 w-5 ${isGenerating ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-4 w-4 sm:h-5 sm:w-5 ${isGenerating ? 'animate-spin' : ''}`} />
             </Button>
             
             {/* User Profile */}
@@ -359,11 +361,11 @@ export const Dashboard: React.FC = () => {
               <DropdownMenuTrigger asChild>
                 <Button 
                   variant="ghost" 
-                  size="icon" 
+                  size={isMobile ? "sm" : "icon"}
                   className="text-white/80 hover:text-white hover:bg-white/10 rounded-full"
                   title="User Profile"
                 >
-                  <User className="h-5 w-5" />
+                  <User className="h-4 w-4 sm:h-5 sm:w-5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent 
@@ -393,12 +395,14 @@ export const Dashboard: React.FC = () => {
               </DropdownMenuContent>
             </DropdownMenu>
             
-            <Button variant="ghost" size="icon" className="text-white/80 hover:text-white hover:bg-white/10 rounded-full">
-              <Search className="h-5 w-5" />
-            </Button>
+            {!isMobile && (
+              <Button variant="ghost" size="icon" className="text-white/80 hover:text-white hover:bg-white/10 rounded-full">
+                <Search className="h-5 w-5" />
+              </Button>
+            )}
             <Button 
               variant="ghost" 
-              size="icon" 
+              size={isMobile ? "sm" : "icon"}
               className="text-white/80 hover:text-white rounded-full"
               style={{
                 backgroundColor: colorPalette ? colorPalette.primaryRgba(0.1) : 'rgba(255, 255, 255, 0.1)',
@@ -406,19 +410,19 @@ export const Dashboard: React.FC = () => {
               }}
               onClick={toggleSettings}
             >
-              <Settings className="h-5 w-5" />
+              <Settings className="h-4 w-4 sm:h-5 sm:w-5" />
             </Button>
           </div>
         </header>
         
         {/* Error toast notification */}
         {showErrorToast && backgroundError && (
-          <div className="absolute top-20 right-6 z-50 bg-red-500/80 text-white px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm border border-red-400/50 transition-all duration-300 animate-in fade-in max-w-sm">
+          <div className="absolute top-16 sm:top-20 right-2 sm:right-6 z-50 bg-red-500/80 text-white px-3 sm:px-4 py-2 sm:py-3 rounded-lg shadow-lg backdrop-blur-sm border border-red-400/50 transition-all duration-300 animate-in fade-in max-w-xs sm:max-w-sm">
             <div className="flex items-start">
-              <AlertTriangle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+              <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5 mr-2 mt-0.5 flex-shrink-0" />
               <div className="flex-1">
-                <p className="font-medium">Background generation failed</p>
-                <p className="text-sm opacity-90 mt-1">{backgroundError}</p>
+                <p className="font-medium text-sm sm:text-base">Background generation failed</p>
+                <p className="text-xs sm:text-sm opacity-90 mt-1">{backgroundError}</p>
                 {backgroundError?.includes('API key') && (
                   <Link href="/api-keys" className="inline-block mt-2 text-sm underline hover:no-underline text-white">
                     Configure API Keys →
@@ -441,18 +445,20 @@ export const Dashboard: React.FC = () => {
         )}
         
         {/* Main content - unified weather widget and visualization */}
-        <div className="flex-1 flex flex-col md:flex-row justify-between items-start md:items-center pt-6 md:pt-0">
+        <div className="flex-1 flex flex-col lg:flex-row justify-between items-start lg:items-center pt-4 sm:pt-6 lg:pt-0 space-y-6 lg:space-y-0">
           {/* Unified weather widget */}
-          <div className="w-full md:w-3/5 mb-8 md:mb-0">
+          <div className="w-full lg:w-3/5">
             <UnifiedWeatherWidget />
           </div>
           
-          {/* World visualization */}
-          <div className="w-full md:w-2/5 flex justify-center items-start md:items-center relative mt-8 md:mt-0">
-            <div className="absolute right-0 top-0 md:relative md:right-auto md:top-auto">
-              <WorldMap />
+          {/* World visualization - hidden on mobile for better UX */}
+          {!isMobile && (
+            <div className="w-full lg:w-2/5 flex justify-center items-start lg:items-center relative">
+              <div className="lg:relative">
+                <WorldMap />
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
       

@@ -4,6 +4,13 @@ import { apiRequest } from '@/lib/queryClient';
 export interface UserSettings {
   location: string;
   temperatureUnit: 'F' | 'C';  // F for Fahrenheit, C for Celsius
+  timezone?: string;  // User's timezone (e.g., "America/New_York")
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
+  voiceId?: 'alloy' | 'ash' | 'ballad' | 'coral' | 'echo' | 'sage' | 'shimmer' | 'verse';  // OpenAI voice preference
+  verboseLogging?: boolean;  // Developer mode for verbose console logging
   lastUpdated?: string;
 }
 
@@ -18,7 +25,10 @@ interface UseSettingsReturn {
 // Default settings - only used as last resort
 const DEFAULT_SETTINGS: UserSettings = {
   location: '', // Intentionally left blank to force geolocation
-  temperatureUnit: 'F'  // Default to Fahrenheit
+  temperatureUnit: 'F',  // Default to Fahrenheit
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, // Auto-detect timezone
+  voiceId: 'alloy', // Default OpenAI voice
+  verboseLogging: false, // Disabled by default
 };
 
 export function useSettings(): UseSettingsReturn {
@@ -62,7 +72,7 @@ export function useSettings(): UseSettingsReturn {
       if (!settingsFound) {
         try {
           console.log('Attempting to load settings from server...');
-          const response = await apiRequest('GET', '/api/settings');
+          const response = await apiRequest('GET', '/api/auth/settings');
           
           // Check if the response is OK before trying to parse JSON
           if (!response.ok) {
@@ -83,14 +93,17 @@ export function useSettings(): UseSettingsReturn {
             throw new Error(data.error);
           }
           
+          // Extract settings from the response wrapper
+          const settings = data.settings || data;
+          
           // Save to local storage for next time
           try {
-            localStorage.setItem('userSettings', JSON.stringify(data));
+            localStorage.setItem('userSettings', JSON.stringify(settings));
           } catch (e) {
             console.warn('Failed to cache settings in localStorage:', e);
           }
           
-          setUserSettings(data);
+          setUserSettings(settings);
           settingsFound = true;
         } catch (err) {
           console.error('Failed to load settings from server:', err);
@@ -147,7 +160,7 @@ export function useSettings(): UseSettingsReturn {
     try {
       // Try to save to server
       console.log('Saving settings to server...');
-      const response = await apiRequest('POST', '/api/settings', updatedSettings);
+      const response = await apiRequest('PUT', '/api/auth/settings', updatedSettings);
       
       if (!response.ok) {
         console.warn(`Server returned status ${response.status} when saving settings`);
@@ -162,17 +175,20 @@ export function useSettings(): UseSettingsReturn {
       
       console.log('Successfully saved settings to server:', data);
       
+      // Extract settings from the response wrapper
+      const settings = data.settings || data;
+      
       // Update local state with server response
-      setUserSettings(data);
+      setUserSettings(settings);
       
       // Also update local storage with server response
       try {
-        localStorage.setItem('userSettings', JSON.stringify(data));
+        localStorage.setItem('userSettings', JSON.stringify(settings));
       } catch (e) {
         console.warn('Failed to update localStorage with server response:', e);
       }
       
-      return data;
+      return settings;
     } catch (err) {
       console.error('Failed to save settings to server:', err);
       // We already updated local state and localStorage, so just return what we have
@@ -190,7 +206,7 @@ export function useSettings(): UseSettingsReturn {
       setUserSettings(DEFAULT_SETTINGS);
       
       // Try to clear on server too
-      await apiRequest('POST', '/api/settings', DEFAULT_SETTINGS);
+      await apiRequest('PUT', '/api/auth/settings', DEFAULT_SETTINGS);
       
       console.log('Settings have been reset to defaults');
     } catch (err) {

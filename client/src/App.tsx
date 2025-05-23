@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { VoiceOrb } from "@/components/voice-orb";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
+import { EventProvider } from "@/contexts/event-context";
 import { AuthForm } from "@/components/auth-form";
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
@@ -47,8 +48,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
-          <Toaster />
-          <Router />
+          <EventProvider>
+            <Toaster />
+            <Router />
+          </EventProvider>
         </AuthProvider>
       </TooltipProvider>
     </QueryClientProvider>

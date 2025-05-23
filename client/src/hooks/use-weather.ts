@@ -157,11 +157,21 @@ export function useWeather() {
     }
   }, [userSettings?.location, userSettings?.temperatureUnit]);
 
-  // Initial fetch on component mount - separate from the settings effect
-  // to ensure we always fetch data even if settings don't change
+  // Initial fetch on component mount - only if we have location data or can use geolocation
   useEffect(() => {
-    console.log("Initial weather data fetch");
-    fetchWeatherData(userSettings?.location);
+    // Don't fetch immediately if settings are still loading
+    if (userSettings === null) {
+      console.log("Settings still loading, delaying initial fetch");
+      return;
+    }
+    
+    // Only fetch if we have a location source available
+    if (userSettings?.location || (useGeolocation && userLocation)) {
+      console.log("Initial weather data fetch with location available");
+      fetchWeatherData(userSettings?.location);
+    } else {
+      console.log("No location available for initial fetch, will wait for settings or geolocation");
+    }
 
     // Refresh weather data every 30 minutes
     const intervalId = setInterval(() => {
@@ -170,7 +180,7 @@ export function useWeather() {
     }, 30 * 60 * 1000);
     
     return () => clearInterval(intervalId);
-  }, []);
+  }, [userSettings, useGeolocation, userLocation]);
 
   // Generate daily forecast from today
   const generateDailyForecast = () => {
