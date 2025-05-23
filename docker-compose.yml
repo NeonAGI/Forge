@@ -1,0 +1,66 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: forge
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: forge_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    volumes:
+      - ./client:/app/client
+      - ./vite.config.ts:/app/vite.config.ts
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=development
+    command: npm run dev:client
+    depends_on:
+      - server
+      - db
+    networks:
+      - app-network
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    volumes:
+      - ./server:/app/server
+      - ./shared:/app/shared
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./.env:/app/.env
+      - ./.env:/app/server/.env
+      - ./server/.env:/app/server/.env
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - WEATHER_API_KEY=81353ded72744698a6a160538251605
+      - OPENAI_API_KEY=sk-your-openai-key-here
+      - OPENWEATHER_API_KEY=7b24b73fe71dbc7713b09bddaa8e7bd0
+      - PORT=3001
+      - DATABASE_URL=postgresql://forge:forge_password@db:5432/forge
+      - ENCRYPTION_KEY=a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
+    command: npm run dev:server
+    depends_on:
+      - db
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge

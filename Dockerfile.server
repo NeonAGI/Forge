@@ -1,0 +1,18 @@
+# Dockerfile for Express/TypeScript backend (server)
+FROM node:20-alpine
+WORKDIR /app
+
+# Set environment variables directly in the Dockerfile
+ENV WEATHER_API_KEY=81353ded72744698a6a160538251605
+ENV OPENAI_API_KEY=sk-your-openai-key-here
+ENV OPENWEATHER_API_KEY=7b24b73fe71dbc7713b09bddaa8e7bd0
+
+COPY package.json package-lock.json ./
+RUN npm install
+COPY ./server ./server
+COPY ./shared ./shared
+COPY ./tsconfig.json ./tsconfig.json
+COPY ./.env ./server/.env
+COPY ./.env ./.env
+EXPOSE 5173
+CMD ["npm", "run", "dev:server"] 

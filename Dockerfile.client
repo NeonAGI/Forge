@@ -1,0 +1,28 @@
+# Dockerfile for Vite/React frontend (client)
+FROM node:20-alpine
+
+# Install dependencies for better CSS processing
+RUN apk add --no-cache python3 make g++
+
+WORKDIR /app
+
+# Copy package files first for better layer caching
+COPY package.json package-lock.json ./
+RUN npm install
+
+# Copy configuration files
+COPY tailwind.config.ts postcss.config.js vite.config.ts ./
+
+# Copy client code
+COPY ./client ./client
+
+# Generate the initial CSS
+RUN npx tailwindcss -o ./client/src/tailwind-output.css
+
+# Update import in main.tsx to include explicitly generated CSS
+RUN echo "import './tailwind-output.css';" > ./tmp.txt && \
+    cat ./client/src/main.tsx >> ./tmp.txt && \
+    mv ./tmp.txt ./client/src/main.tsx
+
+EXPOSE 5173
+CMD ["npm", "run", "dev:client"] 

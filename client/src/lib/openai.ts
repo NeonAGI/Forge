@@ -21,6 +21,17 @@ interface OpenAIVoiceResponse {
   audioUrl: string;
 }
 
+interface OpenAIImageRequest {
+  prompt: string;
+  size?: string;
+  quality?: string;
+}
+
+interface OpenAIImageResponse {
+  imageBase64: string;
+  revisedPrompt: string;
+}
+
 export const openai = {
   // Text generation with OpenAI
   async generateText(request: OpenAITextRequest): Promise<OpenAITextResponse> {
@@ -38,6 +49,17 @@ export const openai = {
     const response = await apiRequest("POST", "/api/openai/voice", {
       text: request.text,
       voice: request.voice || "alloy"
+    });
+    
+    return await response.json();
+  },
+  
+  // Generate image with OpenAI
+  async generateImage(request: OpenAIImageRequest): Promise<OpenAIImageResponse> {
+    const response = await apiRequest("POST", "/api/openai/image", {
+      prompt: request.prompt,
+      size: request.size || "1792x1024",
+      quality: request.quality || "hd"
     });
     
     return await response.json();

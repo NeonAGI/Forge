@@ -1,11 +1,17 @@
 import React from "react";
 import { GlassCard } from "@/components/ui/glass-card";
 import { Button } from "@/components/ui/button";
-import { Mic, Settings, Radio, Activity, CheckCircle2, Volume2 } from "lucide-react";
+import { Mic, Settings, Radio, Activity, CheckCircle2, Volume2, Send } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
-import { useOpenAIRealtime } from "@/hooks/use-openai-realtime";
+import { useOpenAIRealtimeV2 } from "@/hooks/use-openai-realtime-v2";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { Link } from "wouter";
+
+function capitalizeFirstLetter(string: string) {
+  return string.charAt(0).toUpperCase() + string.slice(1);
+}
 
 export const RealtimeWidget: React.FC = () => {
   const { 
@@ -13,15 +19,18 @@ export const RealtimeWidget: React.FC = () => {
     sessionInfo, 
     recentEvents,
     startVoiceChat,
+    disconnect,
     isConnecting,
     connectionError,
     assistantMode,
     updateWakePhrase,
     startWakePhraseDetection,
-    stopWakePhraseDetection
-  } = useOpenAIRealtime();
+    stopWakePhraseDetection,
+    sendTextMessage
+  } = useOpenAIRealtimeV2();
   
   const [wakePhrase, setWakePhrase] = React.useState(sessionInfo.wakePhrase);
+  const [textInput, setTextInput] = React.useState("");
   
   // Handle wake phrase input change
   const handleWakePhraseChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -32,6 +41,22 @@ export const RealtimeWidget: React.FC = () => {
   const saveWakePhrase = () => {
     if (wakePhrase.trim()) {
       updateWakePhrase(wakePhrase);
+    }
+  };
+
+  // Send text message to the assistant
+  const handleSendText = () => {
+    if (textInput.trim() && connectionStatus === 'connected') {
+      sendTextMessage(textInput);
+      setTextInput("");
+    }
+  };
+
+  // Handle Enter key press in the text input
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendText();
     }
   };
 
@@ -85,11 +110,11 @@ export const RealtimeWidget: React.FC = () => {
               "bg-primary/60 hover:bg-primary/80 transition-all flex items-center border border-border/30",
               connectionStatus === 'connected' && "bg-accent-alt/20 border-accent-alt/30"
             )}
-            onClick={startVoiceChat}
-            disabled={isConnecting || connectionStatus === 'connected'}
+            onClick={connectionStatus === 'connected' ? disconnect : startVoiceChat}
+            disabled={isConnecting}
           >
             <Mic className="h-4 w-4 mr-2 text-accent-alt" />
-            {isConnecting ? 'Connecting...' : connectionStatus === 'connected' ? 'Connected' : 'Start Voice Chat'}
+            {isConnecting ? 'Connecting...' : connectionStatus === 'connected' ? 'Disconnect' : 'Start Voice Chat'}
           </Button>
           <Button 
             className={cn(
@@ -159,8 +184,52 @@ export const RealtimeWidget: React.FC = () => {
         </div>
         
         {connectionError && (
-          <div className="mt-2 text-sm text-destructive">
-            {connectionError}
+          <div className="mt-2 p-3 bg-destructive/10 border border-destructive/30 rounded-lg">
+            <div className="text-sm text-destructive font-medium mb-2">
+              Connection Error
+            </div>
+            <div className="text-sm text-destructive">
+              {connectionError}
+            </div>
+            {connectionError.includes('API key') && (
+              <div className="mt-2 flex items-center justify-between">
+                <div className="text-xs text-destructive/80">
+                  💡 Configure your OpenAI API key to enable voice features
+                </div>
+                <Link href="/api-keys" className="text-xs text-accent-alt hover:text-accent-alt/80 underline">
+                  Go to API Keys →
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Text Input Section for Debugging */}
+        {connectionStatus === 'connected' && (
+          <div className="mt-4 border-t border-border/30 pt-4">
+            <div className="text-sm text-text-muted mb-3 flex items-center">
+              <Send className="h-4 w-4 mr-2 text-accent-alt" />
+              <span>Test with Text Input</span>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                onKeyDown={handleKeyPress}
+                placeholder="Type a message to test..."
+                className="flex-1 bg-primary/60 border border-border/30 focus:outline-none focus:ring-1 focus:ring-accent-alt"
+              />
+              <Button
+                className="bg-accent-alt/20 hover:bg-accent-alt/30 text-accent-alt"
+                onClick={handleSendText}
+                disabled={!textInput.trim() || connectionStatus !== 'connected'}
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="mt-2 text-xs text-accent-alt">
+              Send text messages to test the connection without using voice.
+            </div>
           </div>
         )}
         
@@ -192,7 +261,7 @@ export const RealtimeWidget: React.FC = () => {
         <div className="space-y-2 text-sm">
           <div className="flex justify-between p-2 rounded-lg bg-primary/60 border border-border/20">
             <span className="text-text-muted">Voice</span>
-            <span className="font-medium text-text">{sessionInfo.voice || 'Alloy'}</span>
+            <span className="font-medium text-text">{capitalizeFirstLetter(sessionInfo.voice || 'alloy')}</span>
           </div>
           <div className="flex justify-between p-2 rounded-lg bg-primary/60 border border-border/20">
             <span className="text-text-muted">Language</span>
@@ -216,6 +285,24 @@ export const RealtimeWidget: React.FC = () => {
               {sessionInfo.connectionType || 'WebRTC'}
             </Badge>
           </div>
+          <div className="flex justify-between p-2 rounded-lg bg-primary/60 border border-border/20">
+            <span className="text-text-muted">Mode</span>
+            <Badge 
+              variant="outline" 
+              className={cn(
+                "bg-primary/40 border", 
+                assistantMode === 'listening' 
+                  ? 'text-blue-500 border-blue-500/30' 
+                  : assistantMode === 'speaking' 
+                  ? 'text-green-500 border-green-500/30'
+                  : assistantMode === 'processing'
+                  ? 'text-yellow-500 border-yellow-500/30'
+                  : 'text-gray-500 border-gray-500/30'
+              )}
+            >
+              {assistantMode.charAt(0).toUpperCase() + assistantMode.slice(1)}
+            </Badge>
+          </div>
         </div>
         
         {/* Event log with animated indicators */}
@@ -225,7 +312,7 @@ export const RealtimeWidget: React.FC = () => {
               <Activity className="h-3 w-3 mr-1.5" />
               Recent API Activity
             </div>
-            <div className="text-xs space-y-2.5">
+            <div className="text-xs space-y-2.5 max-h-48 overflow-y-auto">
               {recentEvents.map((event, index) => (
                 <div key={index} className="flex items-center group transition-all hover:bg-primary/40 px-2 py-1 rounded-md">
                   <div className="h-5 w-5 mr-2 flex items-center justify-center relative">

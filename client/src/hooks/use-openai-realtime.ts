@@ -71,7 +71,7 @@ export function useOpenAIRealtime() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [isConnecting, setIsConnecting] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo>({
-    voice: 'Alloy',
+    voice: 'alloy',
     language: 'English (US)',
     model: 'gpt-4o-realtime-preview',
     connectionType: 'WebRTC',
@@ -90,144 +90,292 @@ export function useOpenAIRealtime() {
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
   
+  // --- ADD REFS FOR AUDIOCONTEXT AND LOCALSTREAM ---
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const [voiceIntensity, setVoiceIntensity] = useState(0);
+  
   // Function to start a voice chat session
   const startVoiceChat = async () => {
     setIsConnecting(true);
     setConnectionError(null);
-    setAssistantMode('processing'); // Use 'processing' instead of 'connecting' since it's in our defined types
+    setAssistantMode('processing');
+    
+    // --- CLEANUP PREVIOUS CONNECTIONS ---
+    disconnect();
     
     try {
-      // Check if browser supports required APIs
       if (!navigator.mediaDevices || !window.RTCPeerConnection) {
         throw new Error("Your browser doesn't support WebRTC, which is required for voice chat");
       }
       
-      // Initialize WebRTC connection via the server
+      console.log("Initializing WebRTC connection to OpenAI Realtime API...");
+      
+      // --- AUDIOCONTEXT SETUP ---
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+      
+      // --- FETCH SESSION TOKEN ---
       const response = await apiRequest("POST", "/api/realtime/session", {
-        voice: sessionInfo.voice,
+        voice: sessionInfo.voice.toLowerCase(),
         model: sessionInfo.model
       });
       
-      const { offer, sessionId } = await response.json();
+      console.log("Session request response received, status:", response.status);
+      
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (parseError) {
+          throw new Error(`Server error ${response.status}: ${response.statusText}. Unable to parse error details.`);
+        }
+        
+        // Provide specific error messages based on the error type
+        if (response.status === 500 && errorData.error) {
+          if (errorData.error.includes('API key')) {
+            throw new Error("❌ OpenAI API key is missing or invalid. Please configure your API key in Settings → API Keys.");
+          } else if (errorData.error.includes('realtime')) {
+            throw new Error("❌ OpenAI Realtime API access error. Check your API key permissions and billing status.");
+          } else {
+            throw new Error(`❌ Server configuration error: ${errorData.error}`);
+          }
+        }
+        
+        throw new Error(errorData.error || `Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log("Session data received:", data);
+      
+      if (data.error) {
+        if (data.error.includes('API key')) {
+          throw new Error("OpenAI API key is missing or invalid. Please check server configuration.");
+        } else {
+          throw new Error(data.error);
+        }
+      }
+      
+      const { sessionId, ephemeralToken, sessionDetails } = data;
+      
+      if (!sessionId || !ephemeralToken) {
+        throw new Error("Invalid session data received from server. Missing required fields.");
+      }
+      
+      console.log(`Received session ID: ${sessionId} with ephemeral token`);
+      
+      // Update session info with details from the server
+      if (sessionDetails) {
+        setSessionInfo(prev => ({
+          ...prev,
+          voice: sessionDetails.voice || prev.voice,
+          model: sessionDetails.model || prev.model
+        }));
+      }
       
       // Create new WebRTC peer connection with STUN servers
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' }
+        ]
       });
       
+      console.log("RTCPeerConnection created with multiple STUN servers");
+      
       // Set up audio element for playback
-      const audio = new Audio();
+      let audio = new Audio();
       audio.autoplay = true;
+      audio.volume = 1.0;
+      document.body.appendChild(audio);
       setAudioElement(audio);
       
       // Set up to play remote audio from the model
       pc.ontrack = (event) => {
         if (event.streams && event.streams[0]) {
-          audio.srcObject = event.streams[0];
-          console.log("Received remote audio track");
+          const audioStream = new MediaStream();
+          event.streams[0].getAudioTracks().forEach(track => audioStream.addTrack(track));
+          audio.srcObject = audioStream;
+          audio.play().catch(() => {
+            // Fallback: connect to AudioContext
+            try {
+              if (audioContextRef.current) {
+                const source = audioContextRef.current.createMediaStreamSource(audioStream);
+                source.connect(audioContextRef.current.destination);
+              }
+            } catch (err) {
+              console.error('Failed alternative audio approach:', err);
+            }
+          });
         }
       };
       
-      // Try to add local audio track if available
+      // Add local audio track for microphone input
       try {
-        // For demo purposes, we'll skip real microphone access to avoid permission issues
-        // But in a real implementation, we would do this:
-        /*
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: true
-        });
-        mediaStream.getTracks().forEach(track => {
-          pc.addTrack(track, mediaStream);
-        });
-        */
-        console.log("In a real implementation, we would add a local audio track here");
+        console.log("Requesting microphone access...");
+        const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localStreamRef.current = mediaStream;
+        mediaStream.getTracks().forEach(track => pc.addTrack(track, mediaStream));
+        // --- SETUP ANALYSER FOR VOICE INTENSITY ---
+        if (audioContextRef.current) {
+          const source = audioContextRef.current.createMediaStreamSource(mediaStream);
+          const analyser = audioContextRef.current.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          analyserRef.current = analyser;
+          // Animation loop
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          const update = () => {
+            analyser.getByteTimeDomainData(dataArray);
+            // Calculate RMS (root mean square) for intensity
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              const val = (dataArray[i] - 128) / 128;
+              sum += val * val;
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+            setVoiceIntensity(rms); // 0 (silent) to ~1 (loud)
+            animationFrameRef.current = requestAnimationFrame(update);
+          };
+          update();
+        }
       } catch (error) {
         console.error("Could not access microphone:", error);
+        throw new Error("Microphone access is required for voice chat. Please allow microphone permissions.");
       }
       
-      // Monitor connection state changes
+      // Setup event listeners for connection state changes
       pc.onconnectionstatechange = () => {
-        console.log("Connection state:", pc.connectionState);
+        console.log("Connection state changed:", pc.connectionState);
         if (pc.connectionState === 'connected') {
-          // In a real implementation, the assistant would respond to voice input
-          // For this demo, we'll simulate the state transitions
-          setTimeout(() => {
-            setAssistantMode('speaking');
-            
-            // Simulate assistant speaking
-            setTimeout(() => {
-              // After 3 seconds, go back to listening
-              setAssistantMode('listening');
-            }, 3000);
-          }, 1000);
+          console.log("WebRTC connection established successfully!");
+          setConnectionStatus('connected');
+          setAssistantMode('listening');
+          
+          // Record session start time
+          const now = new Date();
+          const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          
+          setSessionInfo(prev => ({
+            ...prev,
+            startTime: formattedTime
+          }));
+          
+          // Add a connection event
+          addRecentEvent("session.created");
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          setConnectionError("WebRTC connection failed or disconnected. Try reconnecting.");
+          console.error("WebRTC connection failed or disconnected:", pc.connectionState);
+          setConnectionError(`WebRTC connection failed or disconnected: ${pc.connectionState}. Try reconnecting.`);
           setConnectionStatus('disconnected');
           setAssistantMode('idle');
         }
       };
       
-      // Add event handlers
-      pc.onicecandidate = async (event: RTCPeerConnectionIceEvent) => {
-        if (event.candidate) {
-          // Send ICE candidate to server
-          await apiRequest("POST", `/api/realtime/ice`, {
-            sessionId,
-            candidate: event.candidate
-          });
+      // Monitor ICE connection state
+      pc.oniceconnectionstatechange = () => {
+        console.log("ICE connection state:", pc.iceConnectionState);
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+          console.error("ICE connection failed or disconnected:", pc.iceConnectionState);
+          setConnectionError(`ICE connection state: ${pc.iceConnectionState}. Check your network connection.`);
         }
       };
       
-      // Setup data channel for OpenAI events based on the documentation
-      const channel = pc.createDataChannel("oai-events");
+      // Other event handlers...
+      pc.onsignalingstatechange = () => {
+        console.log("Signaling state:", pc.signalingState);
+      };
+      
+      pc.onicegatheringstatechange = () => {
+        console.log("ICE gathering state:", pc.iceGatheringState);
+      };
+      
+      // Create data channel for communication
+      console.log("Creating data channel");
+      const channel = pc.createDataChannel("oai-events", {
+        ordered: true,
+      });
       setDataChannel(channel);
       
-      // Handle data channel open event
+      // Handle data channel events
       channel.onopen = () => {
-        console.log("Data channel opened");
+        console.log("Data channel opened successfully");
         setConnectionStatus('connected');
         setAssistantMode('listening');
         
-        // Record session start time
-        const now = new Date();
-        const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
-        setSessionInfo(prev => ({
-          ...prev,
-          startTime: formattedTime
-        }));
-        
-        // Add a connection event
-        addRecentEvent("session.created");
-        
-        // In a real implementation, we would send a greeting or start event to the model
-        try {
-          // The format for sending events to the OpenAI Realtime API
-          const startEvent = JSON.stringify({
-            type: "audio.transcription.response",
-            text: "Hello, how can I help you today?",
-            is_final: true,
-            message_id: generateMessageId()
-          });
-          
-          // In a complete implementation, we'd send this to start the conversation
-          // channel.send(startEvent);
-          
-          // For demo purposes, let's simulate the client-server interaction
-          simulateAssistantInteraction();
-        } catch (error) {
-          console.error("Failed to send initial event:", error);
-        }
+        // --- SEND DETAILED SESSION CONFIG ---
+        const weatherFunction = {
+          type: 'function',
+          name: 'get_weather',
+          description: 'Get the current weather for a specific location',
+          parameters: {
+            type: 'object',
+            properties: {
+              location: { type: 'string', description: 'The city and state or country (e.g., "San Francisco, CA")' },
+              unit: { type: 'string', enum: ['celsius', 'fahrenheit'], description: 'The unit of temperature' }
+            },
+            required: ['location']
+          }
+        };
+        const timeFunction = {
+          type: 'function',
+          name: 'get_current_time',
+          description: 'Get the current time for a specific timezone',
+          parameters: {
+            type: 'object',
+            properties: {
+              timezone: { type: 'string', description: 'The timezone (e.g., "America/New_York")', enum: [ 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Asia/Tokyo', 'Australia/Sydney' ] }
+            },
+            required: ['timezone']
+          }
+        };
+        const sessionConfig = {
+          type: 'session.update',
+          session: {
+            instructions: 'You are a helpful voice assistant. Be concise in your responses. You can help users with weather information and telling the current time in different timezones.',
+            tools: [weatherFunction, timeFunction],
+            tool_choice: 'auto',
+            turn_detection: {
+              type: 'semantic_vad',
+              eagerness: 'medium',
+              create_response: true,
+              interrupt_response: true
+            }
+          }
+        };
+        channel.send(JSON.stringify(sessionConfig));
       };
       
-      // Handle incoming messages from the data channel
+      channel.onerror = (error) => {
+        console.error("Data channel error:", error);
+        setConnectionError(`Data channel error: ${error}`);
+      };
+      
+      channel.onclose = () => {
+        console.log("Data channel closed");
+        setConnectionStatus('disconnected');
+        setAssistantMode('idle');
+      };
+      
       channel.onmessage = (event: MessageEvent) => {
         try {
           const message = JSON.parse(event.data);
-          console.log("Received message:", message);
+          console.log("Received message from OpenAI:", message);
           
-          // Handle different types of messages based on the OpenAI Realtime API
-          if (message.type === 'conversation.started') {
+          // Handle different message types...
+          // (existing message handling code)
+          if (message.type === 'session.created') {
+            addRecentEvent("session.created");
+          } else if (message.type === 'session.updated') {
+            addRecentEvent("session.updated");
+          } else if (message.type === 'conversation.started') {
             addRecentEvent("conversation.started");
           } else if (message.type === 'conversation.completed') {
             addRecentEvent("conversation.completed");
@@ -246,109 +394,164 @@ export function useOpenAIRealtime() {
             setAssistantMode('listening');
           } else if (message.type === 'audio.transcription.response') {
             addRecentEvent("audio.transcription.response");
+          } else if (message.type === 'input_audio_buffer.speech_started') {
+            addRecentEvent("input_audio_buffer.speech_started");
+            setAssistantMode('listening');
+          } else if (message.type === 'input_audio_buffer.speech_stopped') {
+            addRecentEvent("input_audio_buffer.speech_stopped");
+          } else if (message.type === 'input_audio_buffer.committed') {
+            addRecentEvent("input_audio_buffer.committed");
           } else if (message.type === 'assistant.content.response') {
             addRecentEvent("assistant.content.response");
             setAssistantMode('processing');
+          } else if (message.type === 'error') {
+            console.error("Error from OpenAI:", message);
+            addRecentEvent(`error: ${message.code || 'unknown'}`);
+            setConnectionError(`OpenAI error: ${message.message || 'Unknown error'}`);
           }
         } catch (error) {
           console.error("Error parsing message:", error);
         }
       };
       
-      // Handle data channel close
-      channel.onclose = () => {
-        console.log("Data channel closed");
-        setConnectionStatus('disconnected');
-        setAssistantMode('idle');
-      };
+      // Create an offer to start the WebRTC connection
+      console.log("Creating offer for WebRTC connection");
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
       
-      // Generate a unique message ID
-      const generateMessageId = () => {
-        return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      };
-      
-      // Simulate the assistant interaction for demo purposes
-      const simulateAssistantInteraction = () => {
-        // Simulate the AI processing a query after 2 seconds
-        setTimeout(() => {
-          setAssistantMode('processing');
-          addRecentEvent("assistant.content.response");
-          
-          // Then simulate the AI speaking after another 2 seconds
-          setTimeout(() => {
-            setAssistantMode('speaking'); 
-            addRecentEvent("audio.response.started");
-            
-            // Finally back to idle/listening after 3 seconds of "speaking"
-            setTimeout(() => {
-              setAssistantMode('listening');
-              addRecentEvent("audio.response.completed");
-            }, 3000);
-          }, 2000);
-        }, 2000);
-      };
-      
-      // We're handling a data-only connection for simulating the OpenAI Realtime API
-      // No need to add a local audio track since our SDP only includes data channel
-      console.log("Simulating RealTime API connection - audio streaming not implemented in demo");
-      
-      // Set remote description from server offer
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      
-      // Create answer
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      
-      // Send answer to server
-      await apiRequest("POST", `/api/realtime/answer`, {
-        sessionId,
-        answer: pc.localDescription
+      // Send the SDP offer directly to OpenAI using the ephemeral token
+      console.log("Sending SDP offer to OpenAI");
+      const baseUrl = "https://api.openai.com/v1/realtime";
+      const token = typeof ephemeralToken === 'string' ? ephemeralToken : ephemeralToken.value;
+      const sdpResponse = await fetch(`${baseUrl}?model=${sessionInfo.model}`, {
+        method: "POST",
+        body: pc.localDescription?.sdp,
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/sdp",
+          "OpenAI-Beta": "realtime"
+        }
       });
+      
+      if (!sdpResponse.ok) {
+        const errorText = await sdpResponse.text();
+        console.error("Failed to send SDP offer to OpenAI:", sdpResponse.status, errorText);
+        throw new Error(`Failed to establish WebRTC connection: ${errorText}`);
+      }
+      
+      // Set the answer SDP from OpenAI as the remote description
+      const answerSdp = await sdpResponse.text();
+      console.log("Received SDP answer from OpenAI");
+      
+      const answer = new RTCSessionDescription({
+        type: "answer",
+        sdp: answerSdp
+      });
+      
+      await pc.setRemoteDescription(answer);
+      console.log("Remote description set successfully");
       
       setPeerConnection(pc);
       setIsConnecting(false);
+      console.log("Voice chat setup completed, waiting for connection to establish...");
+
+    } catch (requestError: any) {
+      console.error("Error in WebRTC setup:", requestError);
+      throw new Error(`Failed to initialize WebRTC: ${requestError.message}`);
+    }
+  };
+  
+  // Function to send a text message to the AI
+  const sendTextMessage = (text: string) => {
+    if (!dataChannel || dataChannel.readyState !== 'open') {
+      setConnectionError("Not connected to OpenAI. Please start a voice chat first.");
+      return;
+    }
+    
+    try {
+      // Create a conversation item with the text message
+      const createItemEvent = JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: text,
+            }
+          ]
+        }
+      });
       
-    } catch (error: any) {
-      console.error("Error starting voice chat:", error);
-      setConnectionError(error.message || "Failed to connect to OpenAI Realtime");
-      setConnectionStatus('disconnected');
-      setIsConnecting(false);
-      setAssistantMode('idle');
+      // Send the message
+      dataChannel.send(createItemEvent);
+      
+      // Request a response from the model
+      const responseEvent = JSON.stringify({
+        type: "response.create"
+      });
+      
+      dataChannel.send(responseEvent);
+      
+      // Add an event for the sent message
+      addRecentEvent(`sent: ${text.substring(0, 20)}${text.length > 20 ? '...' : ''}`);
+      setAssistantMode('processing');
+    } catch (error) {
+      console.error("Error sending text message:", error);
+      setConnectionError("Failed to send message to OpenAI");
     }
   };
   
   // Function to disconnect
   const disconnect = () => {
-    if (peerConnection) {
-      peerConnection.close();
-      setPeerConnection(null);
-    }
-    
     if (dataChannel) {
       dataChannel.close();
       setDataChannel(null);
     }
-    
+    if (peerConnection) {
+      peerConnection.close();
+      setPeerConnection(null);
+    }
     if (audioElement) {
+      audioElement.pause();
       audioElement.srcObject = null;
+      if (audioElement.parentNode) audioElement.parentNode.removeChild(audioElement);
       setAudioElement(null);
     }
-    
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    // --- CLEANUP ANALYSER AND ANIMATION ---
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    analyserRef.current = null;
+    setVoiceIntensity(0);
     setConnectionStatus('disconnected');
     setSessionInfo(prev => ({
       ...prev,
       startTime: null
     }));
+    
+    setAssistantMode('idle');
   };
   
   // Helper to add events with timestamps
   const addRecentEvent = (name: string) => {
-    const timeString = "just now";
+    const now = new Date();
+    const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     
     setRecentEvents(prev => {
-      // Keep only the 5 most recent events
+      // Keep only the 10 most recent events
       const newEvents = [{ name, time: timeString }, ...prev];
-      return newEvents.slice(0, 5);
+      return newEvents.slice(0, 10);
     });
   };
   
@@ -488,6 +691,14 @@ export function useOpenAIRealtime() {
     }
   };
 
+  // Update voice
+  const updateVoice = (newVoice: string) => {
+    setSessionInfo(prev => ({
+      ...prev,
+      voice: newVoice
+    }));
+  };
+
   return {
     connectionStatus,
     sessionInfo,
@@ -500,6 +711,9 @@ export function useOpenAIRealtime() {
     updateWakePhrase,
     startWakePhraseDetection,
     stopWakePhraseDetection,
-    wakePhraseActive: wakePhraseDetectedRef.current
+    wakePhraseActive: wakePhraseDetectedRef.current,
+    sendTextMessage,
+    updateVoice,
+    voiceIntensity
   };
 }
